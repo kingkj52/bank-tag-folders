@@ -100,6 +100,17 @@ public class ComplianceTest
 			"MethodHandles", "TypeToken");
 	}
 
+	/**
+	 * The hub rejects plugins that build their own Gson: the client's instance
+	 * is injectable and carries its serialisation settings, so a private one
+	 * both duplicates it and drifts from it.
+	 */
+	@Test
+	public void usesTheClientsGson()
+	{
+		forbid("inject the client's Gson rather than constructing one", "new Gson(");
+	}
+
 	@Test
 	public void loadsNoCodeAndSpawnsNoProcesses()
 	{

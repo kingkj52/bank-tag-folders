@@ -43,17 +43,17 @@ public class FolderTree
 	private final ConfigManager configManager;
 
 	/**
-	 * Our own instance rather than an injected one. A side-loaded plugin's
-	 * injector is a child of the client's, and depending on a binding we do not
-	 * own is exactly the kind of startup CreationException that is painful to
-	 * diagnose -- and there is nothing here a stock Gson cannot serialise.
+	 * The client's Gson, injected rather than constructed. Building a fresh
+	 * instance is rejected by the Plugin Hub, and it would also mean this
+	 * plugin quietly stops matching the client's own serialisation settings if
+	 * those ever change.
 	 * <p>
 	 * Everything is read and written as a concrete array type rather than via
 	 * Gson's {@code TypeToken}. TypeToken resolves a generic type at runtime
 	 * through {@code java.lang.reflect.Type}, and the Plugin Hub does not permit
 	 * reflection; an array carries its element type in the class itself.
 	 */
-	private final Gson gson = new Gson();
+	private final Gson gson;
 
 	/** Folder id to folder, insertion ordered so saves round-trip stably. */
 	private final Map<String, Folder> folders = new LinkedHashMap<>();
@@ -62,9 +62,10 @@ public class FolderTree
 	private final List<String> roots = new ArrayList<>();
 
 	@Inject
-	FolderTree(ConfigManager configManager)
+	FolderTree(ConfigManager configManager, Gson gson)
 	{
 		this.configManager = configManager;
+		this.gson = gson;
 	}
 
 	// ------------------------------------------------------------------
