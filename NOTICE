@@ -1,0 +1,19 @@
+Bank Tag Folders
+Copyright (c) 2026, KingKj52
+
+This plugin extends the tag tab system of the Bank Tags plugin that ships with
+RuneLite, and parts of it are derived from that plugin's source, in particular
+net.runelite.client.plugins.banktags.tabs.TabInterface:
+
+  Copyright (c) 2018, Tomas Slusny <slusnucky@gmail.com>
+  Copyright (c) 2018, Ron Young <https://github.com/raiyni>
+  Copyright (c) 2023, Adam <Adam@sigterm.info>
+
+The derived parts are the tab strip's widget layout and geometry constants, the
+menu op numbering, the button repositioning logic, the clipboard import and
+export formats, and the rename, merge and delete flows. They are reproduced so
+that a tag column drawn by this plugin behaves the same way as the one it
+replaces.
+
+RuneLite is licensed under the BSD 2-Clause License, the same licence this
+plugin uses. The full text is in LICENSE.
