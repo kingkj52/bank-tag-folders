@@ -76,12 +76,8 @@ attached to widgets this plugin created, and are handled entirely inside the
 client.
 
 **It sends nothing to the server.** No action is ever issued on your behalf.
-The one place this costs something is the potion store: it is a bank tab on the
-server rather than just a client-side view, so switching away from it in the
-client alone would leave deposits going to it. Rather than do that, the plugin
-declines to open a tag while the store is up and says so in chat. Close the
-potion store and the tab opens normally. The build asserts that no action is
-sent, so this cannot regress.
+If the potion store is opened, it will refuse to switch and send a message
+about closing the store before opening a tag.
 
 **It does not unhide interface components, and it does not move or resize the
 click zones of the 3D scene, inventory, worn equipment, spellbook or prayer
