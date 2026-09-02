@@ -16,9 +16,7 @@ import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
-import net.runelite.api.MenuAction;
 import net.runelite.api.SoundEffectID;
-import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatMessageManager;
@@ -117,11 +115,10 @@ public class ColumnActions
 
 	private void openTag(String tag)
 	{
-		if (client.getVarbitValue(VarbitID.BANK_CURRENTTAB) == BANKTAB_POTIONSTORE)
+		if (isPotionStoreOpen())
 		{
-			// Opening a tag with the potion store up would leave the store open
-			// behind it, which silently breaks deposits.
-			client.menuAction(-1, InterfaceID.Bankmain.POTIONSTORE_BUTTON, MenuAction.CC_OP, 1, -1, "Potion store", "");
+			sayPotionStoreIsOpen();
+			return;
 		}
 		client.setVarbit(VarbitID.BANK_CURRENTTAB, 0);
 
@@ -440,6 +437,11 @@ public class ColumnActions
 					break;
 
 				case TagColumn.NEWTAB_OP_OPEN_TAB_MENU:
+					if (isPotionStoreOpen())
+					{
+						sayPotionStoreIsOpen();
+						break;
+					}
 					client.setVarbit(VarbitID.BANK_CURRENTTAB, 0);
 					core.openTagTabOverview();
 					break;
@@ -614,6 +616,21 @@ public class ColumnActions
 				}
 			})
 			.build();
+	}
+
+	/**
+	 * The potion store is a bank tab on the server, not just a client view, so
+	 * moving off it client-side would leave deposits going to it. We cannot
+	 * close it without sending an action, so we decline instead.
+	 */
+	boolean isPotionStoreOpen()
+	{
+		return client.getVarbitValue(VarbitID.BANK_CURRENTTAB) == BANKTAB_POTIONSTORE;
+	}
+
+	void sayPotionStoreIsOpen()
+	{
+		say("Close the potion store before opening a tag tab.");
 	}
 
 	private void say(String message)

@@ -75,12 +75,13 @@ Tags plugin bundled with RuneLite already does, in the same container.
 attached to widgets this plugin created, and are handled entirely inside the
 client.
 
-**It sends one action to the server**, in one place: when you open a tag while
-the potion store is up, it closes the potion store first. This is copied from
-core Bank Tags, which does the same thing at the same moment, because leaving the
-store open in the background stops deposits working. It only ever happens in
-direct response to you clicking a tag tab. The build asserts there is exactly one
-such call, so a second cannot be added without the test failing.
+**It sends nothing to the server.** No action is ever issued on your behalf.
+The one place this costs something is the potion store: it is a bank tab on the
+server rather than just a client-side view, so switching away from it in the
+client alone would leave deposits going to it. Rather than do that, the plugin
+declines to open a tag while the store is up and says so in chat. Close the
+potion store and the tab opens normally. The build asserts that no action is
+sent, so this cannot regress.
 
 **It does not unhide interface components, and it does not move or resize the
 click zones of the 3D scene, inventory, worn equipment, spellbook or prayer

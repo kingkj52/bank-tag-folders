@@ -35,17 +35,6 @@ public class ComplianceTest
 {
 	private static final Path SOURCE_ROOT = Paths.get("src", "main", "java");
 
-	/**
-	 * The only call in this plugin that reaches the server, pinned to exactly
-	 * one occurrence so that adding another is a build failure rather than a
-	 * judgement made in passing.
-	 * <p>
-	 * It closes the potion store when a tag is opened while the store is up, and
-	 * is a direct copy of what the core Bank Tags plugin does at that moment.
-	 * See ColumnActions#openTag.
-	 */
-	private static final int ALLOWED_MENU_ACTIONS = 1;
-
 	private Map<String, String> sources()
 	{
 		try (Stream<Path> files = Files.walk(SOURCE_ROOT))
@@ -162,31 +151,13 @@ public class ComplianceTest
 	// Jagex third-party client guidelines
 	// ------------------------------------------------------------------
 
+	/** No added menu entries, and no invoking existing ones programmatically. */
 	@Test
-	public void addsNoMenuEntries()
+	public void sendsNothingToTheServer()
 	{
-		forbid("menu entries that send actions to the server are not allowed",
-			"createMenuEntry", "setMenuEntries", "insertMenuItem");
-	}
-
-	/**
-	 * The plugin invokes exactly one existing interface op and no more. A second
-	 * one appearing is a decision that deserves review, not a silent addition.
-	 */
-	@Test
-	public void invokesOnlyTheDocumentedServerAction()
-	{
-		int found = 0;
-		for (String body : sources().values())
-		{
-			int i = body.indexOf("menuAction(");
-			while (i != -1)
-			{
-				found++;
-				i = body.indexOf("menuAction(", i + 1);
-			}
-		}
-		assertEquals("unexpected number of server-bound menu actions", ALLOWED_MENU_ACTIONS, found);
+		forbid("the plugin must not send actions to the server",
+			"createMenuEntry", "setMenuEntries", "insertMenuItem",
+			"menuAction(", "invokeMenuAction");
 	}
 
 	/**

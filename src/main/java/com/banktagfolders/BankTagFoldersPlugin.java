@@ -229,6 +229,11 @@ public class BankTagFoldersPlugin extends Plugin
 			return;
 		}
 
+		if (actions.isPotionStoreOpen())
+		{
+			return;
+		}
+
 		// The server resyncs the last vanilla tab as the bank opens, and it
 		// would otherwise win.
 		client.setVarbit(VarbitID.BANK_CURRENTTAB, 0);
