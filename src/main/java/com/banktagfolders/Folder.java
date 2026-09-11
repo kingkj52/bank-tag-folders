@@ -34,6 +34,17 @@ public class Folder
 
 	private boolean collapsed;
 
+	/**
+	 * Row colour as 0xRRGGBB, shared with every tag inside the folder.
+	 * <p>
+	 * Colour is what marks membership, rather than indenting the member rows.
+	 * The column is only 39px wide and an item sprite is 36 of them, so an
+	 * indent large enough to notice also pushed the icon off the edge.
+	 * <p>
+	 * Zero means one has not been chosen, and a palette colour is assigned.
+	 */
+	private int color;
+
 	/** Member tags, in display order. */
 	private List<String> tags = new ArrayList<>();
 }

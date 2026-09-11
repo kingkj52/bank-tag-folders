@@ -40,6 +40,15 @@ public class FolderTree
 	private static final String TAG = "t:";
 	private static final String FOLDER = "f:";
 
+	/**
+	 * Default folder colours, mid-dark so the game's white and orange text stays
+	 * readable on top. A new folder takes the first one not already in use.
+	 */
+	private static final int[] PALETTE = {
+		0x3A6B8B, 0x4A7A4A, 0x8B3A3A, 0x6B4A8B,
+		0x8B7A3A, 0x3A8B7A, 0x8B5A3A, 0x7A3A6B,
+	};
+
 	private final ConfigManager configManager;
 
 	/**
@@ -89,6 +98,10 @@ public class FolderTree
 					if (folder.getTags() == null)
 					{
 						folder.setTags(new ArrayList<>());
+					}
+					if (folder.getColor() == 0)
+					{
+						folder.setColor(nextColor());
 					}
 					folders.put(folder.getId(), folder);
 				}
@@ -294,6 +307,7 @@ public class FolderTree
 		Folder folder = new Folder();
 		folder.setId(newId());
 		folder.setName(name);
+		folder.setColor(nextColor());
 		folder.getTags().add(target);
 		folder.getTags().add(dragged);
 
@@ -316,6 +330,7 @@ public class FolderTree
 		Folder folder = new Folder();
 		folder.setId(newId());
 		folder.setName(name);
+		folder.setColor(nextColor());
 		folders.put(folder.getId(), folder);
 		roots.add(FOLDER + folder.getId());
 		save();
@@ -513,6 +528,38 @@ public class FolderTree
 		if (folder != null && folder.isCollapsed())
 		{
 			folder.setCollapsed(false);
+			save();
+		}
+	}
+
+	/** The first palette colour no folder is using, else one by position. */
+	private int nextColor()
+	{
+		for (int candidate : PALETTE)
+		{
+			boolean taken = false;
+			for (Folder folder : folders.values())
+			{
+				if (folder.getColor() == candidate)
+				{
+					taken = true;
+					break;
+				}
+			}
+			if (!taken)
+			{
+				return candidate;
+			}
+		}
+		return PALETTE[folders.size() % PALETTE.length];
+	}
+
+	void setColor(String folderId, int rgb)
+	{
+		Folder folder = folders.get(folderId);
+		if (folder != null)
+		{
+			folder.setColor(rgb);
 			save();
 		}
 	}

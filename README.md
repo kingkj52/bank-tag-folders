@@ -25,12 +25,18 @@ plugin stays idle and says so once in chat. It never changes the setting for you
 | Drag a tab onto the middle of a folder row | Files it into that folder, expanding it |
 | Drag a tab past the last row | Sends it to the bottom of the top level |
 | Left-click a folder | Expands or collapses it |
-| Right-click a folder | Change icon, Rename, Delete folder |
+| Right-click a folder | Change icon, Set colour, Rename, Delete folder |
 | Right-click a tab inside a folder | Adds "Remove from folder" |
 
 The middle-versus-edge split is what lets one gesture do two jobs, the way phone
 home screens do. The edge band is a quarter of the row height at each end, which
 is 10px on a stock 40px tab.
+
+Every folder gets a colour, and the tabs inside it are tinted to match. That is
+what marks a tab as belonging to a folder. Right-click a folder and pick
+**Set colour** to type your own as hex, in either `3a6b8b` or `#3a6b8b` form,
+with `3ab` shorthand also accepted. New folders are given a colour from a
+built-in palette, so they are distinguishable straight away.
 
 Emptying a folder deletes it, whether you drag the last tab out or delete that
 tab from the bank. Deleting a folder only removes the grouping; the tabs inside
@@ -56,8 +62,10 @@ The column is a port of the core plugin's tab strip, not a reduced replacement:
 
 ## Configuration
 
-* **Tag row height** and **Folder row height** - the game's own tabs are 40px
+* **Tag row height** - applies to folders too. The game's own tabs are 40px
   tall; smaller values fit more rows on screen.
+* **Folder colour strength** - how strongly a folder's colour tints the tabs
+  inside it. Set it to zero to leave them untinted.
 * **Protect layout spacing** - off by default, matching Bank Tags exactly. When
   a tab has a layout, any tagged item not yet in that layout drops into the first
   free slot, from the top. If you deliberately leave blank slots as spacing, turn
@@ -129,7 +137,7 @@ back exactly as it was.
 ./gradlew build
 ```
 
-Copy `build/libs/bank-tag-folders-1.0.jar` into
+Copy `build/libs/bank-tag-folders-1.1.jar` into
 `.runelite/sideloaded-plugins/` to run it locally.
 
 ## Licence and credits

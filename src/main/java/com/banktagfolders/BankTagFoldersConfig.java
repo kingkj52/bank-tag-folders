@@ -11,7 +11,7 @@ public interface BankTagFoldersConfig extends Config
 	@ConfigItem(
 		keyName = "tagRowHeight",
 		name = "Tag row height",
-		description = "Height of a tag tab. The game's own tabs are 40; smaller fits more on screen.",
+		description = "Height of a row, folders included. The game's own tabs are 40; smaller fits more on screen.",
 		position = 2
 	)
 	@Range(min = 24, max = 48)
@@ -21,15 +21,15 @@ public interface BankTagFoldersConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "folderRowHeight",
-		name = "Folder row height",
-		description = "Height of a folder header row.",
-		position = 3
+		keyName = "folderColourStrength",
+		name = "Folder colour strength",
+		description = "How strongly a folder's colour tints the tabs inside it. Zero leaves them untinted.",
+		position = 4
 	)
-	@Range(min = 16, max = 40)
-	default int folderRowHeight()
+	@Range(max = 100)
+	default int folderColourStrength()
 	{
-		return 24;
+		return 55;
 	}
 
 	@ConfigItem(
@@ -40,7 +40,7 @@ public interface BankTagFoldersConfig extends Config
 			+ "<br><br>Turn this on only if you deliberately leave blank slots as spacing and want them left alone --"
 			+ " unlaid items are then appended below the layout instead. If your tabs rely on those items landing"
 			+ " in the blanks, this will look wrong.",
-		position = 4
+		position = 5
 	)
 	default boolean protectLayoutSpacing()
 	{

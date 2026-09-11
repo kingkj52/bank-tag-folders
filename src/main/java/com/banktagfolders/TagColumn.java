@@ -42,10 +42,9 @@ import net.runelite.client.util.ColorUtil;
  * them. Rows are created once per bank rebuild and only <em>repositioned</em>
  * when scrolling, which is why scrolling stays cheap.
  * <p>
- * The one structural departure from core is that rows have different heights --
- * a folder header is shorter than a tag tab -- so where core divides the
- * available height by a fixed tab height to get a tab count, this packs rows by
- * pixel against a budget.
+ * Rows are packed against a pixel budget rather than counted against a fixed tab
+ * height as core does, so a row is free to be a different size without the
+ * scrolling arithmetic caring.
  */
 @Slf4j
 @Singleton
@@ -77,17 +76,23 @@ public class TagColumn
 
 	static final int FOLDER_OP_TOGGLE = 1;
 	static final int FOLDER_OP_CHANGE_ICON = 2;
-	static final int FOLDER_OP_RENAME = 3;
-	static final int FOLDER_OP_DELETE = 4;
+	static final int FOLDER_OP_SET_COLOUR = 3;
+	static final int FOLDER_OP_RENAME = 4;
+	static final int FOLDER_OP_DELETE = 5;
 
 	static final int NEWTAB_OP_NEW_TAB = 1;
 	static final int NEWTAB_OP_IMPORT_TAB = 2;
 	static final int NEWTAB_OP_OPEN_TAB_MENU = 3;
 	static final int NEWTAB_OP_NEW_FOLDER = 4;
 
-	private static final int NEST_INDENT = 6;
-	private static final int FOLDER_BACKGROUND = 0x3E3529;
-	private static final int FOLDER_TEXT = 0xFF981F;
+	private static final int FOLDER_TEXT = 0xFFFFFF;
+
+	/**
+	 * Widget opacity runs 0 (solid) to 255 (invisible), so a folder header sits
+	 * near solid while member rows are only tinted, letting the tab sprite show
+	 * through underneath.
+	 */
+	private static final int HEADER_OPACITY = 30;
 
 	private final Client client;
 	private final BankTagFoldersConfig config;
@@ -496,7 +501,6 @@ public class TagColumn
 	private RenderedRow buildTagRow(StripRow row, int width)
 	{
 		String tag = row.getTag();
-		int indent = row.isNested() ? NEST_INDENT : 0;
 		int height = config.tagRowHeight();
 		String name = ColorUtil.wrapWithColorTag(tag, HILIGHT_COLOR);
 		boolean active = tag.equals(core.activeTag());
@@ -505,16 +509,28 @@ public class TagColumn
 
 		Widget background = createGraphic(name,
 			(active ? TabSprites.TAB_BACKGROUND_ACTIVE : TabSprites.TAB_BACKGROUND).getSpriteId(),
-			-1, width - indent, height, MARGIN + indent, -1);
+			-1, width, height, MARGIN, -1);
 		background.setSpriteTiling(true);
 		addTabActions(row, background);
 		addDragOptions(background);
 		out.pieces.add(new Piece(background, 0));
 		rowByWidget.put(background, row);
 
+		// Membership is shown by colour rather than by indenting the row. An
+		// indent deep enough to read also pushed the 36px item sprite off the
+		// right of a 39px column.
+		if (row.isNested())
+		{
+			// Lighter over the active tab, which would otherwise stop looking
+			// active once it is tinted.
+			int opacity = Math.min(255, tintOpacity() + (active ? 60 : 0));
+			out.pieces.add(new Piece(
+				fill(row.getParent().getColor(), opacity, MARGIN, width, height), 0));
+		}
+
 		int iconDy = Math.max(0, (height - Constants.ITEM_SPRITE_HEIGHT) / 2);
 		Widget icon = createGraphic(name, -1, core.iconFor(tag),
-			Constants.ITEM_SPRITE_WIDTH, Constants.ITEM_SPRITE_HEIGHT, MARGIN + 3 + indent, -1);
+			Constants.ITEM_SPRITE_WIDTH, Constants.ITEM_SPRITE_HEIGHT, MARGIN + 3, -1);
 		addTabActions(row, icon);
 		addDragOptions(icon);
 		out.pieces.add(new Piece(icon, iconDy));
@@ -530,56 +546,53 @@ public class TagColumn
 	private RenderedRow buildFolderRow(StripRow row, int width)
 	{
 		Folder folder = row.getFolder();
-		int height = config.folderRowHeight();
+		int height = config.tagRowHeight();
 		String name = ColorUtil.wrapWithColorTag(folder.getName(), HILIGHT_COLOR);
 
 		RenderedRow out = new RenderedRow(row, height);
 
-		Widget background = parent.createChild(-1, WidgetType.RECTANGLE);
-		background.setFilled(true);
-		background.setTextColor(FOLDER_BACKGROUND);
-		background.setOpacity(60);
-		background.setOriginalX(MARGIN);
-		background.setOriginalY(-1);
-		background.setOriginalWidth(width);
-		background.setOriginalHeight(height);
+		Widget background = fill(folder.getColor(), HEADER_OPACITY, MARGIN, width, height);
 		background.setName(name);
 		background.setAction(FOLDER_OP_TOGGLE, folder.isCollapsed() ? "Expand" : "Collapse");
 		background.setAction(FOLDER_OP_CHANGE_ICON, "Change icon");
+		background.setAction(FOLDER_OP_SET_COLOUR, "Set colour");
 		background.setAction(FOLDER_OP_RENAME, "Rename folder");
 		background.setAction(FOLDER_OP_DELETE, "Delete folder");
 		background.setHasListener(true);
 		background.setOnOpListener((JavaScriptCallback) event ->
 			actions.get().onFolderOp(event.getOp() - 1, row));
 		addDragOptions(background);
-		background.revalidate();
 		out.pieces.add(new Piece(background, 0));
 		rowByWidget.put(background, row);
 
+		// Item sprites are transparent around the item, so the folder's colour
+		// still reads through from the rectangle behind. Drawn at its native
+		// size: scaling one down is a nearest-neighbour resample and looks
+		// visibly broken.
+		int icon = folderIcon(folder);
+		if (icon > 0)
+		{
+			Widget item = createGraphic(name, -1, icon,
+				Constants.ITEM_SPRITE_WIDTH, Constants.ITEM_SPRITE_HEIGHT, MARGIN + 3, -1);
+			out.pieces.add(new Piece(item, (height - Constants.ITEM_SPRITE_HEIGHT) / 2));
+		}
+
 		// A plain "+"/"-" rather than a chevron: the game fonts do not carry the
-		// arrow codepoints, and a missing glyph reads as an empty row.
+		// arrow codepoints, and a missing glyph reads as an empty row. Badged
+		// into the corner when there is an icon under it.
 		Widget marker = parent.createChild(-1, WidgetType.TEXT);
 		marker.setText(folder.isCollapsed() ? "+" : "-");
 		marker.setFontId(FontID.BOLD_12);
 		marker.setTextColor(FOLDER_TEXT);
 		marker.setTextShadowed(true);
-		marker.setOriginalX(MARGIN + 3);
+		marker.setOriginalX(MARGIN + 2);
 		marker.setOriginalY(-1);
-		marker.setOriginalWidth(8);
-		marker.setOriginalHeight(height);
+		marker.setOriginalWidth(10);
+		marker.setOriginalHeight(icon > 0 ? 12 : height);
 		marker.setXTextAlignment(WidgetTextAlignment.LEFT);
 		marker.setYTextAlignment(WidgetTextAlignment.CENTER);
 		marker.revalidate();
 		out.pieces.add(new Piece(marker, 0));
-
-		int icon = folderIcon(folder);
-		if (icon > 0)
-		{
-			int size = Math.min(Constants.ITEM_SPRITE_HEIGHT, height - 2);
-			// Sits just right of the +/- marker.
-			Widget item = createGraphic(name, -1, icon, size, size, MARGIN + 12, -1);
-			out.pieces.add(new Piece(item, Math.max(0, (height - size) / 2)));
-		}
 
 		return out;
 	}
@@ -626,6 +639,28 @@ public class TagColumn
 		w.setDragDeadZone(5);
 		w.setItemQuantity(10000);
 		w.setItemQuantityMode(ItemQuantityMode.NEVER);
+	}
+
+	/** A filled rectangle in the given colour, used for folder and member tint. */
+	private Widget fill(int rgb, int opacity, int x, int width, int height)
+	{
+		Widget w = parent.createChild(-1, WidgetType.RECTANGLE);
+		w.setFilled(true);
+		w.setTextColor(rgb);
+		w.setOpacity(opacity);
+		w.setOriginalX(x);
+		w.setOriginalY(-1);
+		w.setOriginalWidth(width);
+		w.setOriginalHeight(height);
+		w.revalidate();
+		return w;
+	}
+
+	/** Config gives strength as a percentage; widgets want transparency. */
+	private int tintOpacity()
+	{
+		int strength = Math.max(0, Math.min(100, config.folderColourStrength()));
+		return 255 - (strength * 255 / 100);
 	}
 
 	private Widget createGraphic(String name, int spriteId, int itemId, int width, int height, int x, int y)

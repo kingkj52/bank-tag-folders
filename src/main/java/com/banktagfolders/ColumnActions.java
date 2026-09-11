@@ -373,6 +373,10 @@ public class ColumnActions
 						.build();
 					break;
 
+				case TagColumn.FOLDER_OP_SET_COLOUR:
+					setFolderColour(folder);
+					break;
+
 				case TagColumn.FOLDER_OP_RENAME:
 					promptName("Enter new name for folder \"" + folder.getName() + "\":", name ->
 					{
@@ -395,6 +399,57 @@ public class ColumnActions
 		catch (Exception e)
 		{
 			log.warn("Folder option {} failed", op, e);
+		}
+	}
+
+	/**
+	 * Ask for a colour as hex. There is no colour picker reachable from the
+	 * bank, and the chatbox is already how this plugin asks for names.
+	 */
+	private void setFolderColour(Folder folder)
+	{
+		chatboxPanelManager.openTextInput("Folder colour as hex (e.g. 3a6b8b):")
+			.addCharValidator(TabInterface.FILTERED_CHARS)
+			.onDone((Consumer<String>) value -> clientThread.invoke(() ->
+			{
+				Integer rgb = parseHexColour(value);
+				if (rgb == null)
+				{
+					say("That is not a hex colour. Try six hex digits, like 3a6b8b.");
+					return;
+				}
+				tree.setColor(folder.getId(), rgb);
+				column.get().rebuild();
+			}))
+			.build();
+	}
+
+	/** Accepts rgb or rrggbb, with or without a leading hash. */
+	private Integer parseHexColour(String value)
+	{
+		String hex = value == null ? "" : value.trim().replace("#", "");
+		if (hex.length() == 3)
+		{
+			StringBuilder expanded = new StringBuilder();
+			for (char c : hex.toCharArray())
+			{
+				expanded.append(c).append(c);
+			}
+			hex = expanded.toString();
+		}
+
+		if (hex.length() != 6)
+		{
+			return null;
+		}
+
+		try
+		{
+			return Integer.parseInt(hex, 16);
+		}
+		catch (NumberFormatException e)
+		{
+			return null;
 		}
 	}
 
