@@ -8,28 +8,50 @@ import net.runelite.client.config.Range;
 @ConfigGroup(FolderTree.GROUP)
 public interface BankTagFoldersConfig extends Config
 {
+	/**
+	 * The tab background sprite is 40 pixels tall and is drawn tiled, so a taller
+	 * row repeats it and shows the top edge of a second tab inside the first.
+	 */
+	int MAX_ROW_HEIGHT = 40;
+
+
 	@ConfigItem(
 		keyName = "tagRowHeight",
 		name = "Tag row height",
-		description = "Height of a row, folders included. The game's own tabs are 40; smaller fits more on screen.",
+		description = "Height of a row, folders included. 24 to 40, since the game's tab background is itself 40"
+			+ " tall and repeats above that. Smaller fits more rows on screen.",
 		position = 2
 	)
-	@Range(min = 24, max = 48)
+	@Range(min = 24, max = MAX_ROW_HEIGHT)
 	default int tagRowHeight()
 	{
 		return 40;
 	}
 
 	@ConfigItem(
-		keyName = "folderColourStrength",
-		name = "Folder colour strength",
-		description = "How strongly a folder's colour tints the tabs inside it. Zero leaves them untinted.",
+		keyName = "tagTintStrength",
+		name = "Tag tint strength",
+		description = "How strongly a folder's colour tints the tag tabs inside it."
+			+ " Zero leaves them looking like ordinary tabs.",
 		position = 4
 	)
 	@Range(max = 100)
-	default int folderColourStrength()
+	default int tagTintStrength()
 	{
-		return 55;
+		return 35;
+	}
+
+	@ConfigItem(
+		keyName = "folderTintStrength",
+		name = "Folder tint strength",
+		description = "How strongly a folder's colour fills the folder's own row."
+			+ " Zero leaves only the icon and the expand marker.",
+		position = 5
+	)
+	@Range(max = 100)
+	default int folderTintStrength()
+	{
+		return 68;
 	}
 
 	@ConfigItem(
@@ -40,7 +62,7 @@ public interface BankTagFoldersConfig extends Config
 			+ "<br><br>Turn this on only if you deliberately leave blank slots as spacing and want them left alone --"
 			+ " unlaid items are then appended below the layout instead. If your tabs rely on those items landing"
 			+ " in the blanks, this will look wrong.",
-		position = 5
+		position = 6
 	)
 	default boolean protectLayoutSpacing()
 	{

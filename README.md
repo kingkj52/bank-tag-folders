@@ -62,10 +62,13 @@ The column is a port of the core plugin's tab strip, not a reduced replacement:
 
 ## Configuration
 
-* **Tag row height** - applies to folders too. The game's own tabs are 40px
-  tall; smaller values fit more rows on screen.
-* **Folder colour strength** - how strongly a folder's colour tints the tabs
-  inside it. Set it to zero to leave them untinted.
+* **Tag row height** - applies to folders too. 24 to 40, capped because the
+  game's tab background sprite is itself 40px tall and repeats above that.
+  Smaller values fit more rows on screen.
+* **Tag tint strength** - how strongly a folder's colour tints the tag tabs
+  inside it. Zero leaves them looking like ordinary tabs.
+* **Folder tint strength** - how strongly the colour fills the folder's own row,
+  tuned separately from the tabs inside it.
 * **Protect layout spacing** - off by default, matching Bank Tags exactly. When
   a tab has a layout, any tagged item not yet in that layout drops into the first
   free slot, from the top. If you deliberately leave blank slots as spacing, turn

@@ -87,13 +87,6 @@ public class TagColumn
 
 	private static final int FOLDER_TEXT = 0xFFFFFF;
 
-	/**
-	 * Widget opacity runs 0 (solid) to 255 (invisible), so a folder header sits
-	 * near solid while member rows are only tinted, letting the tab sprite show
-	 * through underneath.
-	 */
-	private static final int HEADER_OPACITY = 30;
-
 	private final Client client;
 	private final BankTagFoldersConfig config;
 	private final FolderTree tree;
@@ -501,7 +494,7 @@ public class TagColumn
 	private RenderedRow buildTagRow(StripRow row, int width)
 	{
 		String tag = row.getTag();
-		int height = config.tagRowHeight();
+		int height = rowHeight();
 		String name = ColorUtil.wrapWithColorTag(tag, HILIGHT_COLOR);
 		boolean active = tag.equals(core.activeTag());
 
@@ -523,7 +516,7 @@ public class TagColumn
 		{
 			// Lighter over the active tab, which would otherwise stop looking
 			// active once it is tinted.
-			int opacity = Math.min(255, tintOpacity() + (active ? 60 : 0));
+			int opacity = Math.min(255, opacityOf(config.tagTintStrength()) + (active ? 60 : 0));
 			out.pieces.add(new Piece(
 				fill(row.getParent().getColor(), opacity, MARGIN, width, height), 0));
 		}
@@ -546,12 +539,12 @@ public class TagColumn
 	private RenderedRow buildFolderRow(StripRow row, int width)
 	{
 		Folder folder = row.getFolder();
-		int height = config.tagRowHeight();
+		int height = rowHeight();
 		String name = ColorUtil.wrapWithColorTag(folder.getName(), HILIGHT_COLOR);
 
 		RenderedRow out = new RenderedRow(row, height);
 
-		Widget background = fill(folder.getColor(), HEADER_OPACITY, MARGIN, width, height);
+		Widget background = fill(folder.getColor(), opacityOf(config.folderTintStrength()), MARGIN, width, height);
 		background.setName(name);
 		background.setAction(FOLDER_OP_TOGGLE, folder.isCollapsed() ? "Expand" : "Collapse");
 		background.setAction(FOLDER_OP_CHANGE_ICON, "Change icon");
@@ -656,11 +649,24 @@ public class TagColumn
 		return w;
 	}
 
-	/** Config gives strength as a percentage; widgets want transparency. */
-	private int tintOpacity()
+	/**
+	 * Clamped rather than trusted. A value stored while the allowed range was
+	 * wider would otherwise keep rendering out of range until someone reopened
+	 * the setting.
+	 */
+	private int rowHeight()
 	{
-		int strength = Math.max(0, Math.min(100, config.folderColourStrength()));
-		return 255 - (strength * 255 / 100);
+		return Math.max(24, Math.min(BankTagFoldersConfig.MAX_ROW_HEIGHT, config.tagRowHeight()));
+	}
+
+	/**
+	 * Config gives strength as a percentage of colour; widgets want the
+	 * opposite, where 0 is solid and 255 is invisible.
+	 */
+	private static int opacityOf(int strength)
+	{
+		int clamped = Math.max(0, Math.min(100, strength));
+		return 255 - (clamped * 255 / 100);
 	}
 
 	private Widget createGraphic(String name, int spriteId, int itemId, int width, int height, int x, int y)
