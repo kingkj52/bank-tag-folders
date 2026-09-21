@@ -522,9 +522,12 @@ public class TagColumn
 		}
 
 		int iconDy = Math.max(0, (height - Constants.ITEM_SPRITE_HEIGHT) / 2);
+		// Only the background carries the menu options. The icon sits on top of
+		// it and the two overlap, so giving both the same options makes the
+		// client collect every entry twice. Clicks land on the background
+		// underneath, which is how the stock strip does it too.
 		Widget icon = createGraphic(name, -1, core.iconFor(tag),
 			Constants.ITEM_SPRITE_WIDTH, Constants.ITEM_SPRITE_HEIGHT, MARGIN + 3, -1);
-		addTabActions(row, icon);
 		addDragOptions(icon);
 		out.pieces.add(new Piece(icon, iconDy));
 		rowByWidget.put(icon, row);
