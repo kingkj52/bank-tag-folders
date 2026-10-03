@@ -140,7 +140,7 @@ back exactly as it was.
 ./gradlew build
 ```
 
-Copy `build/libs/bank-tag-folders-1.2.jar` into
+Copy `build/libs/bank-tag-folders-1.3.jar` into
 `.runelite/sideloaded-plugins/` to run it locally.
 
 ## Licence and credits
