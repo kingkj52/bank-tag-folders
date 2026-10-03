@@ -295,7 +295,7 @@ public class BankTagFoldersPlugin extends Plugin
 			{
 				title.setText("Tag tab tab");
 			}
-			else if (core.activeTag() != null)
+			else if (core.activeTag() != null && !core.hidesTagName())
 			{
 				title.setText("Tag tab <col=ff0000>" + core.activeTag() + "</col>");
 			}

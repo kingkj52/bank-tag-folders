@@ -485,6 +485,24 @@ public class CoreBankTags
 	// Opening tags
 	// ------------------------------------------------------------------
 
+	/**
+	 * Whether whoever opened the current tag asked for its name to stay hidden.
+	 * <p>
+	 * Plugins can drive the bank filter through a tag of their own without that
+	 * tag being something a player should ever see. Inventory Setups does this,
+	 * opening "_invsetup_&lt;name&gt;" and writing its own bank title. Stamping
+	 * our title over the top leaves the internal name on screen.
+	 */
+	boolean hidesTagName()
+	{
+		BankTagsService bankTags = service();
+		if (bankTags instanceof BankTagsPlugin)
+		{
+			return (((BankTagsPlugin) bankTags).getOptions() & BankTagsService.OPTION_HIDE_TAG_NAME) != 0;
+		}
+		return false;
+	}
+
 	@Nullable
 	String activeTag()
 	{
