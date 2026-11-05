@@ -240,6 +240,29 @@ public class FolderTree
 		return false;
 	}
 
+	/**
+	 * The one tab that changed name between two tab lists, as {from, to}, or null
+	 * when the change was anything else.
+	 * <p>
+	 * Core renames by removing the old name and adding the new one in a single
+	 * write, so exactly one name gone and one arrived is a rename. Anything else
+	 * (a deletion, an import, a new tab) is not, and reconcile() deals with it.
+	 */
+	@Nullable
+	static String[] renamed(List<String> before, List<String> after)
+	{
+		List<String> gone = new ArrayList<>(before);
+		gone.removeAll(after);
+		List<String> arrived = new ArrayList<>(after);
+		arrived.removeAll(before);
+
+		if (gone.size() == 1 && arrived.size() == 1)
+		{
+			return new String[]{gone.get(0), arrived.get(0)};
+		}
+		return null;
+	}
+
 	// ------------------------------------------------------------------
 	// Display
 	// ------------------------------------------------------------------

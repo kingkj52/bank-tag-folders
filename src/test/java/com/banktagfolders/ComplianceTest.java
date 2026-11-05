@@ -147,6 +147,19 @@ public class ComplianceTest
 		assertEquals("unexpected dependency " + offenders, 0, offenders.size());
 	}
 
+	/**
+	 * The README promises that nothing is written into Bank Tags' configuration
+	 * and that disabling the plugin leaves the flat tag list as it was. Writing
+	 * through its managers, or to its config group, would break that.
+	 */
+	@Test
+	public void writesNothingIntoBankTags()
+	{
+		forbid("the plugin must not write into the Bank Tags configuration",
+			"TabManager", "TagManager", "LayoutManager",
+			"setConfiguration(BankTagsPlugin", "unsetConfiguration(BankTagsPlugin");
+	}
+
 	// ------------------------------------------------------------------
 	// Jagex third-party client guidelines
 	// ------------------------------------------------------------------

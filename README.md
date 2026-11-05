@@ -4,17 +4,20 @@ Collapsible folders for the bank tag tab column.
 
 If you keep more tag tabs than fit down the side of the bank, this groups them.
 Drag one tab onto another to make a folder, name it, and collapse it out of the
-way. Everything else about the tag column keeps working exactly as it does now.
+way. Everything else about the tag column keeps working exactly as it does now,
+because it is still the Bank Tags column underneath.
 
 ## Requirements
 
-This plugin needs the core **Bank Tags** plugin **enabled**, with its own
-**"Tag tabs" option switched off**.
+This plugin needs the core **Bank Tags** plugin **enabled**, with its **"Tag
+tabs" option on**. That is the default, so there is normally nothing to change.
 
-Bank Tags still owns your tags, icons and layouts. This plugin only draws the
-column, because both strips build their widgets into the same bank container and
-would delete each other's on every rebuild. Until you turn that option off, this
-plugin stays idle and says so once in chat. It never changes the setting for you.
+Bank Tags still draws the column and owns your tags, icons and layouts. This
+plugin runs after it on the same bank rebuild and rearranges what it drew: it
+hides the tabs inside closed folders, adds a header row for each folder, and
+restacks the rest. With "Tag tabs" off there is no column to put folders in, so
+this plugin stays idle and says so once in chat. It never changes the setting
+for you.
 
 ## Folders
 
@@ -27,6 +30,7 @@ plugin stays idle and says so once in chat. It never changes the setting for you
 | Left-click a folder | Expands or collapses it |
 | Right-click a folder | Change icon, Set colour, Rename, Delete folder |
 | Right-click a tab inside a folder | Adds "Remove from folder" |
+| Right-click the new tab button | Adds "New folder", for an empty folder to drag tabs into |
 
 The middle-versus-edge split is what lets one gesture do two jobs, the way phone
 home screens do. The edge band is a quarter of the row height at each end, which
@@ -42,23 +46,27 @@ Emptying a folder deletes it, whether you drag the last tab out or delete that
 tab from the bank. Deleting a folder only removes the grouping; the tabs inside
 spill back out where it stood.
 
-## Everything the stock tab strip does
+## Everything else is Bank Tags
 
-The column is a port of the core plugin's tab strip, not a reduced replacement:
+Because the tabs are Bank Tags' own, all of this works as it always has, with no
+copy of it in this plugin:
 
-* Mouse-wheel scrolling over the column, scroll arrows, and hold-to-scroll when
-  you drag an item onto an arrow
-* New tag tab, Import tag tab (both the core format and Bank Tag Layouts'),
-  Export tag tab to clipboard, View tag tabs
+* New tag tab, Import tag tab, Export tag tab, View tag tabs
 * Change icon, Rename (including the merge-into-existing-tag flow), Delete
-  (tab and tag, tab only, or cancel)
 * Enable and disable layout per tab, and the per-tab layout editor
 * Drag a bank item onto a tab to tag it; shift-drag to tag every variant
-* Reorder by dragging
-* Reopens the tag you last had open, honouring Bank Tags' own
-  "Remember last tag tab" setting rather than adding a second one
-* Column height clamped against the incinerator, the collapse button and the
-  storage popup, so rows never run underneath them
+* Reopening the last tag, honouring Bank Tags' own "Remember last tag tab"
+  setting. If that tag is inside a closed folder, the folder is opened and
+  scrolled to so the tab is visibly the active one.
+* The bank title, including for plugins such as Inventory Setups that open a tag
+  under a name they do not want shown
+* Other plugins that read the tab list, such as Bank Tag Layouts
+
+What this plugin takes over is scrolling, since Bank Tags counts tabs and folders
+change what a row is: the mouse wheel over the column, the scroll arrows, and
+holding a dragged item over an arrow all scroll by row. The column is also kept
+clear of the incinerator, the collapse button and the storage popup, using the
+space Bank Tags has already worked out.
 
 ## Configuration
 
@@ -72,23 +80,26 @@ The column is a port of the core plugin's tab strip, not a reduced replacement:
 * **Protect layout spacing** - off by default, matching Bank Tags exactly. When
   a tab has a layout, any tagged item not yet in that layout drops into the first
   free slot, from the top. If you deliberately leave blank slots as spacing, turn
-  this on and those items are appended below the layout instead.
+  this on and those items are appended below the layout instead. This is the one
+  case where this plugin opens a tag itself rather than leaving the click to Bank
+  Tags.
 
 ## What this plugin touches in the game
 
 Stated plainly, because it is what the Plugin Hub review is for.
 
-**It draws client-side widgets into the bank.** The tag column is built as
-dynamic children of the bank's item container, which is exactly what the Bank
-Tags plugin bundled with RuneLite already does, in the same container.
+**It rearranges client-side widgets in the bank.** The tag column is the dynamic
+children of the bank's item container that the Bank Tags plugin bundled with
+RuneLite builds. This plugin moves and hides those, and adds a few of its own
+beside them for the folder rows and tinting.
 
-**It does not add menu entries.** Options on the column's own widgets are
-attached to widgets this plugin created, and are handled entirely inside the
-client.
+**It does not add menu entries.** The two options it adds, "Remove from folder"
+and "New folder", are options on widgets of that same column, and clicking them
+is handled entirely inside the client. Folder rows work the same way.
 
 **It sends nothing to the server.** No action is ever issued on your behalf.
-If the potion store is opened, it will refuse to switch and send a message
-about closing the store before opening a tag.
+If the potion store is open and Protect layout spacing is on, it will refuse to
+switch tags and send a message about closing the store first.
 
 **It does not unhide interface components, and it does not move or resize the
 click zones of the 3D scene, inventory, worn equipment, spellbook or prayer
@@ -101,9 +112,6 @@ that too.
 files. Folder definitions are stored through RuneLite's own configuration, in the
 `banktagfolders` group.
 
-Import and export of tag tabs use your system clipboard, which is local to your
-machine. Nothing is transmitted off the client.
-
 The build asserts all of this, so the claims cannot quietly go stale.
 
 ## How this differs from similar plugins
@@ -112,27 +120,25 @@ The hub already has several bank tag plugins, and asks people to extend rather
 than fragment. This one occupies a different slot:
 
 * **Bank Tag Layouts** arranges the items *inside* a tab. This arranges the
-  *tabs* themselves. They compose, and this plugin is written to keep out of its
-  way: it mirrors the tab list into the core `TabManager` precisely so that Bank
-  Tag Layouts still sees your tabs and keeps working when the core strip is off.
+  *tabs* themselves. They compose, and nothing here is in its way: the core tab
+  list it reads is never touched.
 * **Bank Tab Organizer** and **Bank Tag Generation** create and populate tags.
   This plugin does not create tags; it groups the ones you already have.
 * **Expanded Bank Tags Viewer** changes how tags are viewed. This adds hierarchy
   to the tab column.
 
-Extending Bank Tags itself was considered first. It is not workable: the core
-strip's `TabManager.save()` writes its in-memory tab list back to
-`banktags.tagtabs` whenever a tab is renamed, deleted or reordered, so hiding a
-collapsed folder's tabs by removing them from that list would permanently delete
-them from the user's configuration. Owning the column outright is the only way to
-hide rows safely.
-
 ## Your tags are safe
 
-Folder definitions live entirely in this plugin's own config group. Nothing about
-them is written into `banktags`, and the core tag list stays the single source of
-truth for which tags exist. Disable this plugin and you get your flat tag list
-back exactly as it was.
+Folder definitions live entirely in this plugin's own config group. Nothing is
+ever written into `banktags`, not the tab list, the icons or the layouts, and
+the build asserts that too. The core tag list stays the single source of truth
+for which tags exist.
+
+Disable this plugin and you get your flat tag list back exactly as it was. The order
+you arrange tabs in while it is on is kept in this plugin's own config group, so it
+does not carry across to the flat list. Hiding a collapsed folder's tabs is done to
+the widgets on screen and never to the list Bank Tags saves, so there is nothing
+for a rename, delete or reorder to write back wrongly.
 
 ## Building
 
@@ -140,13 +146,13 @@ back exactly as it was.
 ./gradlew build
 ```
 
-Copy `build/libs/bank-tag-folders-1.3.jar` into
+Copy `build/libs/bank-tag-folders-2.0.jar` into
 `.runelite/sideloaded-plugins/` to run it locally.
 
 ## Licence and credits
 
 BSD 2-Clause. See `LICENSE`.
 
-Parts of the tab strip are derived from the Bank Tags plugin that ships with
-RuneLite, which is under the same licence. See `NOTICE` for what is derived and
-who wrote it.
+This plugin is written against the Bank Tags plugin that ships with RuneLite,
+which is under the same licence. See `NOTICE` for what is derived and who wrote
+it.

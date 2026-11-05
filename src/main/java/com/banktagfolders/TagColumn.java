@@ -4,47 +4,47 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Provider;
 import javax.inject.Singleton;
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.Constants;
 import net.runelite.api.FontID;
 import net.runelite.api.Point;
-import net.runelite.api.ScriptEvent;
 import net.runelite.api.gameval.InterfaceID;
-import net.runelite.api.widgets.ItemQuantityMode;
 import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetConfig;
 import net.runelite.api.widgets.WidgetTextAlignment;
 import net.runelite.api.widgets.WidgetType;
-import net.runelite.client.plugins.banktags.BankTagsPlugin;
-import net.runelite.client.plugins.banktags.tabs.TabSprites;
 import net.runelite.client.ui.JagexColors;
 import net.runelite.client.util.ColorUtil;
+import net.runelite.client.util.Text;
 
 /**
- * The tag column: a faithful rebuild of the core plugin's tab strip, with
- * folders layered on top.
+ * The tag column, rearranged into folders.
  * <p>
- * The widget model is copied from {@code TabInterface} because it has to be.
- * The strip lives in the <em>dynamic</em> children of
- * {@code Bankmain.ITEMS_CONTAINER}: a handful of persistent widgets first (the
- * scroll catcher, the two arrows and the new-tab button), then the rows after
- * them. Rows are created once per bank rebuild and only <em>repositioned</em>
- * when scrolling, which is why scrolling stays cheap.
+ * Bank Tags draws its own column and keeps doing so. It builds the strip as
+ * dynamic children of {@code Bankmain.ITEMS_CONTAINER}: four fixed widgets (the
+ * scroll catcher, the two arrows and the new-tab button) followed by a
+ * background and an icon for every tab. After each of its rebuilds this class
+ * hides the tabs inside closed folders, adds a header row for each folder, and
+ * restacks what is left. Every tab stays Bank Tags' own widget, so renaming,
+ * deleting, exporting, layouts, icons and dropping an item on a tab are still
+ * its code doing it.
  * <p>
- * Rows are packed against a pixel budget rather than counted against a fixed tab
- * height as core does, so a row is free to be a different size without the
- * scrolling arithmetic caring.
+ * Core relays its tabs out by position in that child array from several places
+ * that raise no event, so {@link #heal()} notices when it has done so and draws
+ * again. Everything of ours is appended after core's widgets and removed again
+ * before each redraw.
  */
 @Slf4j
 @Singleton
@@ -54,36 +54,30 @@ public class TagColumn
 
 	static final String SCROLL_UP = "Scroll up";
 	static final String SCROLL_DOWN = "Scroll down";
+	static final String OPTION_VIEW_TAG = "View tag tab";
+	static final String OPTION_UNFILE = "Remove from folder";
+	static final String OPTION_NEW_FOLDER = "New folder";
 
 	private static final int TAB_WIDTH = 39;
 	private static final int MARGIN = 1;
-	private static final int BUTTON_HEIGHT = 20;
-	private static final int NEW_TAB_HEIGHT = 39;
-	/** Offset from the bottom of the bank container, as core measures it. */
-	private static final int BANK_BOTTOM_OFFSET = 39;
+	/** Children core creates before any tab: scroll catcher, up, down, new tab. */
+	private static final int CORE_BUTTONS = 4;
+	/** Height core gives a tab, and the height of the sprite behind it. */
+	private static final int NATIVE_TAB_HEIGHT = 40;
+	private static final int MIN_ROW_HEIGHT = 24;
 	/** Rate limit for hold-to-scroll on the arrow buttons, in milliseconds. */
 	private static final int SCROLL_TICK = 500;
+	private static final int HIDDEN = Integer.MIN_VALUE;
 
-	/** Ops, numbered as core numbers them: registered at index, read as index+1. */
-	static final int TAB_OP_OPEN_TAG = 1;
-	static final int TAB_OP_CHANGE_ICON = 2;
-	static final int TAB_OP_LAYOUT = 3;
-	static final int TAB_OP_EXPORT_TAB = 4;
-	static final int TAB_OP_RENAME_TAB = 5;
-	static final int TAB_OP_DELETE_TAB = 6;
-	/** Ours, and only present on a tag that is actually inside a folder. */
+	/** Ours, registered on a tag's own background beside core's six. */
 	static final int TAB_OP_UNFILE = 7;
+	static final int NEWTAB_OP_NEW_FOLDER = 4;
 
 	static final int FOLDER_OP_TOGGLE = 1;
 	static final int FOLDER_OP_CHANGE_ICON = 2;
 	static final int FOLDER_OP_SET_COLOUR = 3;
 	static final int FOLDER_OP_RENAME = 4;
 	static final int FOLDER_OP_DELETE = 5;
-
-	static final int NEWTAB_OP_NEW_TAB = 1;
-	static final int NEWTAB_OP_IMPORT_TAB = 2;
-	static final int NEWTAB_OP_OPEN_TAB_MENU = 3;
-	static final int NEWTAB_OP_NEW_FOLDER = 4;
 
 	private static final int FOLDER_TEXT = 0xFFFFFF;
 
@@ -93,50 +87,53 @@ public class TagColumn
 	private final CoreBankTags core;
 
 	/**
-	 * Lazily resolved to break the injection cycle: the actions need to ask for
-	 * a redraw when they finish, and the column needs to hand them clicks.
+	 * Lazily resolved to break the injection cycle: the actions ask for a redraw
+	 * when they finish, and the column hands them clicks.
 	 */
 	private final Provider<ColumnActions> actions;
 
 	private Widget parent;
-	private Widget scrollComponent;
-	private Widget upButton;
-	private Widget downButton;
+	private Widget scroll;
+	private Widget up;
+	private Widget down;
 	private Widget newTab;
 
-	@Getter
-	private boolean initialised;
+	/** The scroll widget our listeners are on, so a fresh bank gets them again. */
+	private Widget hooked;
 
-	/**
-	 * How many dynamic children the bank container already had before we added
-	 * ours. Core assumes zero; measuring instead means a stray child from
-	 * elsewhere is left alone rather than deleted.
-	 */
-	private int baseChildCount;
+	/** Every widget core made for a tab. */
+	private final List<Widget> coreWidgets = new ArrayList<>();
+
+	/** Widgets we added to the container, in creation order. Never core's. */
+	private final List<Widget> created = new ArrayList<>();
+	private final Set<Widget> ours = Collections.newSetFromMap(new IdentityHashMap<>());
+
+	/** Where each widget should be after the last layout, or {@link #HIDDEN}. */
+	private final Map<Widget, Integer> expectedY = new IdentityHashMap<>();
+
+	private final Map<Widget, StripRow> rowByWidget = new IdentityHashMap<>();
+	private final List<RenderedRow> rendered = new ArrayList<>();
+
+	/** What the container looked like when we last drew, to notice core redrawing. */
+	private Widget firstCore;
+	private int childCount = -1;
+	@Nullable
+	private Widget lastDragged;
 
 	private int scrollRow;
 	private int availableHeight;
 	private Instant startScroll = Instant.now();
 
-	private List<StripRow> rows = new ArrayList<>();
-	private final List<RenderedRow> rendered = new ArrayList<>();
-	private final Map<Widget, StripRow> rowByWidget = new IdentityHashMap<>();
-
 	/**
-	 * The icons we appended to the bank's item list for the tag-tab overview.
-	 * <p>
-	 * Held by reference rather than by index. The bank's own item widgets live
-	 * in the same container, and an index remembered from one bank state is a
-	 * licence to hide somebody else's widgets in the next.
+	 * Set on shutdown. Rows are then drawn as core would draw them, which is what
+	 * the scroll listeners we cannot hand back keep drawing until the bank is
+	 * reopened and core makes its own again.
 	 */
-	private final List<Widget> overviewIcons = new ArrayList<>();
+	private boolean detached;
 
-	/**
-	 * A tag to open the folder of and scroll to on the next rebuild.
-	 * <p>
-	 * Deferred because the request arrives as the bank initialises, well before
-	 * there are any rows to scroll among.
-	 */
+	/** Open the folder holding the active tag on the next draw, once per bank. */
+	private boolean revealPending;
+
 	@Nullable
 	private String pendingReveal;
 
@@ -157,14 +154,18 @@ public class TagColumn
 		private final Widget widget;
 		private final int dy;
 
-		Piece(Widget widget, int dy)
+		/** The core widget this one only mimics, hidden while that one is carried. */
+		@Nullable
+		private final Widget mirrorOf;
+
+		Piece(Widget widget, int dy, @Nullable Widget mirrorOf)
 		{
 			this.widget = widget;
 			this.dy = dy;
+			this.mirrorOf = mirrorOf;
 		}
 	}
 
-	/** A row's widgets, created once per rebuild and repositioned on scroll. */
 	private static class RenderedRow
 	{
 		private final StripRow row;
@@ -181,6 +182,19 @@ public class TagColumn
 		}
 	}
 
+	/** What core has drawn. */
+	private static final class CoreColumn
+	{
+		private Widget parent;
+		private Widget scroll;
+		private Widget up;
+		private Widget down;
+		private Widget newTab;
+
+		/** Core's widgets per tab, in the order it made them: background, then icon. */
+		private final Map<String, List<Widget>> tabs = new LinkedHashMap<>();
+	}
+
 	/** Where a drop landed relative to the row under the cursor. */
 	enum DropZone
 	{
@@ -194,9 +208,7 @@ public class TagColumn
 	 * <p>
 	 * The distinction is what lets one gesture do two jobs. Dropping into the
 	 * middle of a tab groups the two into a folder, the way phone home screens
-	 * do; dropping near an edge inserts between rows instead. Without it,
-	 * "drag one tab onto another" would have to mean either grouping or
-	 * reordering, and the other would need a menu.
+	 * do; dropping near an edge inserts between rows instead.
 	 */
 	static class Drop
 	{
@@ -221,153 +233,114 @@ public class TagColumn
 	}
 
 	// ------------------------------------------------------------------
-	// Lifecycle
+	// Reading core's column
 	// ------------------------------------------------------------------
 
-	void init()
+	@Nullable
+	private CoreColumn scan()
 	{
-		if (initialised)
+		Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS_CONTAINER);
+		if (container == null)
 		{
-			return;
+			return null;
 		}
 
-		parent = client.getWidget(InterfaceID.Bankmain.ITEMS_CONTAINER);
-		if (parent == null)
+		Widget[] children = container.getChildren();
+		if (children == null || children.length < CORE_BUTTONS)
 		{
-			return;
+			return null;
 		}
 
-		Widget[] existing = parent.getChildren();
-		baseChildCount = existing == null ? 0 : existing.length;
+		Widget[] buttons = Arrays.copyOf(children, CORE_BUTTONS);
+		for (Widget button : buttons)
+		{
+			if (button == null)
+			{
+				return null;
+			}
+		}
 
-		int width = TAB_WIDTH;
+		// Anything else in the container is not core's column: another plugin
+		// may share it, and drawing into somebody else's widgets would be worse
+		// than drawing nothing.
+		if (!hasAction(buttons[1], SCROLL_UP) || !hasAction(buttons[2], SCROLL_DOWN))
+		{
+			return null;
+		}
 
-		// Not really a text widget -- it exists only to catch the scroll wheel
-		// over the column, exactly as core's does.
-		scrollComponent = parent.createChild(-1, WidgetType.TEXT);
-		scrollComponent.setHasListener(true);
-		scrollComponent.setNoScrollThrough(true);
-		scrollComponent.setOnScrollWheelListener((JavaScriptCallback) event -> scrollBy(event.getMouseY()));
+		CoreColumn column = new CoreColumn();
+		column.parent = container;
+		column.scroll = buttons[0];
+		column.up = buttons[1];
+		column.down = buttons[2];
+		column.newTab = buttons[3];
 
-		upButton = createGraphic("", TabSprites.UP_ARROW.getSpriteId(), -1, width, BUTTON_HEIGHT, MARGIN, 0);
-		upButton.setAction(1, SCROLL_UP);
-		upButton.setClickMask(upButton.getClickMask() | WidgetConfig.DRAG_ON);
-		upButton.setHasListener(true);
-		upButton.setOnOpListener((JavaScriptCallback) event -> scrollBy(-1));
+		for (int i = CORE_BUTTONS; i < children.length; i++)
+		{
+			Widget child = children[i];
+			if (child == null || ours.contains(child))
+			{
+				continue;
+			}
 
-		downButton = createGraphic("", TabSprites.DOWN_ARROW.getSpriteId(), -1, width, BUTTON_HEIGHT, MARGIN, 0);
-		downButton.setAction(1, SCROLL_DOWN);
-		downButton.setClickMask(downButton.getClickMask() | WidgetConfig.DRAG_ON);
-		downButton.setHasListener(true);
-		downButton.setOnOpListener((JavaScriptCallback) event -> scrollBy(1));
+			String name = child.getName();
+			if (name == null || name.isEmpty())
+			{
+				continue;
+			}
 
-		newTab = createGraphic("", TabSprites.NEW_TAB.getSpriteId(), -1, width, NEW_TAB_HEIGHT, MARGIN, 0);
-		newTab.setHasListener(true);
-		newTab.setAction(NEWTAB_OP_NEW_TAB, "New tag tab");
-		newTab.setAction(NEWTAB_OP_IMPORT_TAB, "Import tag tab");
-		newTab.setAction(NEWTAB_OP_OPEN_TAB_MENU, "View tag tabs");
-		newTab.setAction(NEWTAB_OP_NEW_FOLDER, "New folder");
-		newTab.setOnOpListener((JavaScriptCallback) event -> actions.get().onNewTabOp(event.getOp() - 1));
+			String tag = Text.removeTags(name);
+			if (!tag.isEmpty())
+			{
+				column.tabs.computeIfAbsent(tag, t -> new ArrayList<>(2)).add(child);
+			}
+		}
 
-		tree.load();
-		initialised = true;
+		return column;
 	}
 
-	/**
-	 * Whether the widgets in the container are still the ones we put there.
-	 * <p>
-	 * The core strip's {@code deinit()} calls {@code deleteAllChildren()} on the
-	 * same container, so toggling its setting -- or any other plugin rebuilding
-	 * the bank -- can pull our widgets out from under us while we still think we
-	 * are set up. Verified by identity rather than by counting, because a count
-	 * can match by coincidence.
-	 */
-	private boolean ownsWidgets()
+	/** Take away an option we added, without growing the array to say so. */
+	private static void clearAction(Widget widget, int index)
 	{
-		if (parent == null || scrollComponent == null || parent != client.getWidget(InterfaceID.Bankmain.ITEMS_CONTAINER))
+		String[] ops = widget.getActions();
+		if (ops != null && ops.length > index && ops[index] != null)
+		{
+			widget.setAction(index, null);
+		}
+	}
+
+	private static boolean hasAction(Widget widget, String option)
+	{
+		String[] ops = widget.getActions();
+		if (ops == null)
 		{
 			return false;
 		}
-
-		Widget[] children = parent.getChildren();
-		return children != null
-			&& children.length > baseChildCount
-			&& children[baseChildCount] == scrollComponent;
-	}
-
-	void deinit()
-	{
-		// Only cut back what is still ours. Truncating a container something
-		// else has since rebuilt would delete that plugin's widgets instead.
-		if (parent != null && ownsWidgets())
+		for (String op : ops)
 		{
-			truncateChildren(baseChildCount);
+			if (option.equals(op))
+			{
+				return true;
+			}
 		}
-
-		parent = scrollComponent = upButton = downButton = newTab = null;
-		initialised = false;
-		rendered.clear();
-		rowByWidget.clear();
-		rows = new ArrayList<>();
-		scrollRow = 0;
-		// Not hidden first: the bank is closing and will rebuild these widgets
-		// itself, and they may already be gone.
-		overviewIcons.clear();
-		pendingReveal = null;
-	}
-
-	/** Cut our widgets back off, leaving anything that was there before us. */
-	private void truncateChildren(int keep)
-	{
-		Widget[] children = parent.getChildren();
-		if (children == null)
-		{
-			return;
-		}
-		if (keep <= 0)
-		{
-			parent.deleteAllChildren();
-			return;
-		}
-		if (children.length > keep)
-		{
-			parent.setChildren(Arrays.copyOf(children, keep));
-		}
+		return false;
 	}
 
 	// ------------------------------------------------------------------
-	// Building
+	// Drawing
 	// ------------------------------------------------------------------
 
 	/**
-	 * Rebuild everything.
+	 * Draw the column again from core's widgets.
 	 * <p>
-	 * Wrapped end to end: a layout mistake should cost the player their tag
-	 * column for a frame, never their bank.
+	 * Wrapped end to end: a layout mistake should cost the player their folders
+	 * for a frame, never their bank.
 	 */
 	void rebuild()
 	{
 		try
 		{
-			// Our widgets can be destroyed underneath us -- the core strip's
-			// deinit deletes every child of this container. Rebuilding onto
-			// dead references is what makes toggling either plugin leave a
-			// half-drawn column behind, so start over instead.
-			if (initialised && !ownsWidgets())
-			{
-				deinit();
-			}
-
-			if (!initialised)
-			{
-				init();
-			}
-			if (!initialised)
-			{
-				return;
-			}
-			repositionButtons();
-			rebuildRows();
+			draw();
 		}
 		catch (Exception e)
 		{
@@ -375,111 +348,72 @@ public class TagColumn
 		}
 	}
 
-	/**
-	 * Reposition without rebuilding.
-	 * <p>
-	 * Used for bank resizes and the storage popup, where the rows themselves are
-	 * unchanged and only the space they have has moved.
-	 */
-	void relayout()
+	private void draw()
 	{
-		try
+		CoreColumn column = scan();
+		if (column == null)
 		{
-			if (initialised)
+			forget();
+			return;
+		}
+
+		parent = column.parent;
+		scroll = column.scroll;
+		up = column.up;
+		down = column.down;
+		newTab = column.newTab;
+
+		removeOurs();
+		hook();
+
+		if (detached)
+		{
+			clearAction(newTab, NEWTAB_OP_NEW_FOLDER);
+		}
+		else
+		{
+			newTab.setAction(NEWTAB_OP_NEW_FOLDER, OPTION_NEW_FOLDER);
+		}
+
+		// The tab list in config is what core keeps current, and it is the only
+		// thing that may delete a folder entry. An empty answer while core has
+		// tabs drawn means we asked mid-rebuild, and must not read as "all gone".
+		List<String> live = core.tagTabs();
+		if (!live.isEmpty() || column.tabs.isEmpty())
+		{
+			tree.reconcile(live);
+		}
+
+		if (revealPending)
+		{
+			revealPending = false;
+			String active = core.activeTag();
+			if (active != null)
 			{
-				repositionButtons();
-				layoutRows();
-			}
-		}
-		catch (Exception e)
-		{
-			log.warn("Tag column relayout failed", e);
-		}
-	}
-
-	/**
-	 * Position the fixed furniture and work out how much height the rows get.
-	 * <p>
-	 * Ported from core's {@code repositionButtons}, including the clamping
-	 * against the incinerator, the collapse button and the storage popup tab --
-	 * without which the column runs underneath them.
-	 */
-	private void repositionButtons()
-	{
-		int height = parent.getHeight() - BANK_BOTTOM_OFFSET;
-
-		Widget widget = client.getWidget(InterfaceID.Bankmain.INCINERATOR_TARGET);
-		if (widget != null && !widget.isHidden())
-		{
-			height = Math.min(height, widget.getRelativeY());
-		}
-
-		widget = client.getWidget(InterfaceID.Bankmain.POPUP_BUTTON_OUT);
-		if (widget != null && !widget.isHidden())
-		{
-			height = Math.min(height, widget.getRelativeY());
-		}
-
-		Widget popupTab = client.getWidget(InterfaceID.Bankmain.STORAGE_POPUP_TAB);
-		if (popupTab != null && !popupTab.isHidden())
-		{
-			widget = client.getWidget(InterfaceID.Bankmain.GIM_STORAGE);
-			if (widget != null && !widget.isHidden())
-			{
-				height = Math.min(height, popupTab.getRelativeY() + widget.getRelativeY());
-			}
-
-			widget = client.getWidget(InterfaceID.Bankmain.POTIONSTORE_BUTTON);
-			if (widget != null && !widget.isHidden())
-			{
-				height = Math.min(height, popupTab.getRelativeY() + widget.getRelativeY());
+				// Expanded before the rows are flattened, so the tag is actually
+				// among them and can be scrolled to below.
+				tree.reveal(active);
+				pendingReveal = active;
 			}
 		}
 
-		int width = TAB_WIDTH;
+		List<StripRow> rows = detached ? flat(column) : tree.rows();
+		int height = detached ? NATIVE_TAB_HEIGHT : rowHeight();
 
-		newTab.setOriginalWidth(width);
-		newTab.revalidate();
-
-		scrollComponent.setOriginalY(NEW_TAB_HEIGHT + 2 + BUTTON_HEIGHT);
-		scrollComponent.setOriginalWidth(width + MARGIN * 2);
-
-		availableHeight = Math.max(0, height - scrollComponent.getOriginalY() - BUTTON_HEIGHT);
-		scrollComponent.setOriginalHeight(availableHeight);
-		scrollComponent.revalidate();
-
-		upButton.setOriginalY(NEW_TAB_HEIGHT + 2);
-		upButton.setOriginalWidth(width);
-		upButton.revalidate();
-
-		downButton.setOriginalY(scrollComponent.getOriginalY() + availableHeight + MARGIN);
-		downButton.setOriginalWidth(width);
-		downButton.revalidate();
-	}
-
-	private void rebuildRows()
-	{
-		truncateChildren(baseChildCount + 4);
-		rendered.clear();
-		rowByWidget.clear();
-
-		// Before anything is drawn: other plugins ask the core TabManager what
-		// tabs exist, and with the core strip off nothing else fills it in.
-		core.syncTabManager();
-
-		tree.reconcile(core.tagTabs());
-		if (pendingReveal != null)
+		for (List<Widget> widgets : column.tabs.values())
 		{
-			// Expanded before the rows are flattened, so the tag is actually
-			// among them and can be scrolled to below.
-			tree.reveal(pendingReveal);
+			coreWidgets.addAll(widgets);
 		}
-		rows = tree.rows();
 
-		int width = TAB_WIDTH;
 		for (StripRow row : rows)
 		{
-			rendered.add(row.isFolder() ? buildFolderRow(row, width) : buildTagRow(row, width));
+			RenderedRow built = row.isFolder()
+				? buildFolderRow(row, height, column)
+				: buildTagRow(row, height, column.tabs.get(row.getTag()));
+			if (built != null)
+			{
+				rendered.add(built);
+			}
 		}
 
 		layoutRows();
@@ -489,65 +423,282 @@ public class TagColumn
 			scrollToTag(pendingReveal);
 			pendingReveal = null;
 		}
+
+		remember();
 	}
 
-	private RenderedRow buildTagRow(StripRow row, int width)
+	private static List<StripRow> flat(CoreColumn column)
 	{
-		String tag = row.getTag();
-		int height = rowHeight();
-		String name = ColorUtil.wrapWithColorTag(tag, HILIGHT_COLOR);
-		boolean active = tag.equals(core.activeTag());
+		List<StripRow> rows = new ArrayList<>();
+		for (String tag : column.tabs.keySet())
+		{
+			rows.add(StripRow.tag(tag, null));
+		}
+		return rows;
+	}
+
+	/**
+	 * Cut our widgets back off, leaving core's exactly as it made them.
+	 * <p>
+	 * Found by identity rather than by where they sit, and from a set that
+	 * outlives {@link #forget()}. Anything of ours that is left attached but no
+	 * longer tracked is never hidden or moved again, and stays on screen at its
+	 * old position, painting a folder's tint over whichever tab now sits there.
+	 */
+	private void removeOurs()
+	{
+		Widget[] children = parent.getChildren();
+		if (children != null && !ours.isEmpty())
+		{
+			List<Widget> kept = new ArrayList<>(children.length);
+			for (Widget child : children)
+			{
+				if (child != null && !ours.contains(child))
+				{
+					kept.add(child);
+				}
+			}
+
+			// Core may have rebuilt its tabs since, truncating the child array
+			// and taking ours with it, in which case there is nothing to cut.
+			if (kept.size() != children.length)
+			{
+				// Copied from the array the client handed over rather than built
+				// fresh: it only accepts its own array type, and a plain Widget[]
+				// fails with a ClassCastException on every redraw.
+				Widget[] trimmed = Arrays.copyOf(children, kept.size());
+				for (int i = 0; i < trimmed.length; i++)
+				{
+					trimmed[i] = kept.get(i);
+				}
+				parent.setChildren(trimmed);
+			}
+		}
+
+		created.clear();
+		ours.clear();
+		rowByWidget.clear();
+		rendered.clear();
+		coreWidgets.clear();
+		expectedY.clear();
+	}
+
+	/**
+	 * Take over scrolling. Core scrolls by an index into its flat tab list, which
+	 * is not what is drawn once folders are closed, so its arithmetic lands on the
+	 * wrong row. Replacing the listeners on the widgets it already made beats
+	 * adding a second set of arrows.
+	 */
+	private void hook()
+	{
+		if (scroll == hooked)
+		{
+			return;
+		}
+		hooked = scroll;
+
+		scroll.setOnScrollWheelListener((JavaScriptCallback) event -> scrollBy(event.getMouseY()));
+		up.setOnOpListener((JavaScriptCallback) event -> scrollBy(-1));
+		down.setOnOpListener((JavaScriptCallback) event -> scrollBy(1));
+	}
+
+	private void remember()
+	{
+		Widget[] children = parent.getChildren();
+		childCount = children == null ? -1 : children.length;
+		firstCore = children != null && children.length > CORE_BUTTONS ? children[CORE_BUTTONS] : null;
+	}
+
+	/**
+	 * Redraw if core has rebuilt or relaid its column behind our back.
+	 * <p>
+	 * Core rebuilds its tabs from inside its own option handlers (delete, rename,
+	 * import) and relays them out when the bank is resized, none of which raises
+	 * an event we hear. Both are cheap to spot: a rebuild replaces the widgets,
+	 * and a relayout moves or unhides ones we have placed. Two reads per widget
+	 * when there is nothing to do.
+	 */
+	void heal()
+	{
+		Widget container = client.getWidget(InterfaceID.Bankmain.ITEMS_CONTAINER);
+		if (container == null)
+		{
+			return;
+		}
+
+		Widget[] children = container.getChildren();
+		if (children == null || children.length <= CORE_BUTTONS)
+		{
+			return;
+		}
+
+		if (!attached(children))
+		{
+			rebuild();
+		}
+		else if (!placed())
+		{
+			layoutRows();
+		}
+	}
+
+	private boolean attached(Widget[] children)
+	{
+		if (firstCore == null || scroll == null || children.length != childCount)
+		{
+			return false;
+		}
+		if (children[0] != scroll || children[CORE_BUTTONS] != firstCore)
+		{
+			return false;
+		}
+		return created.isEmpty() || children[children.length - 1] == created.get(created.size() - 1);
+	}
+
+	private boolean placed()
+	{
+		Widget dragged = client.getDraggedWidget();
+		if (dragged != lastDragged)
+		{
+			return false;
+		}
+
+		for (Map.Entry<Widget, Integer> entry : expectedY.entrySet())
+		{
+			Widget widget = entry.getKey();
+			if (widget == dragged)
+			{
+				continue;
+			}
+
+			int y = entry.getValue();
+			boolean hidden = widget.isSelfHidden();
+			if (y == HIDDEN ? !hidden : hidden || widget.getOriginalY() != y)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** Forget everything: the bank closed, or core's column is gone. */
+	void forget()
+	{
+		parent = scroll = up = down = newTab = hooked = null;
+		firstCore = null;
+		lastDragged = null;
+		childCount = -1;
+		// created and ours are kept: whatever of ours is still attached has to be
+		// found and removed by the next draw.
+		created.clear();
+		rowByWidget.clear();
+		rendered.clear();
+		coreWidgets.clear();
+		expectedY.clear();
+	}
+
+	void onBankClosed()
+	{
+		forget();
+		scrollRow = 0;
+		revealPending = false;
+		pendingReveal = null;
+	}
+
+	/** Ask for the active tag's folder to be opened when the column next builds. */
+	void requestReveal()
+	{
+		revealPending = true;
+	}
+
+	/**
+	 * Put the column back as core drew it and stop interfering.
+	 * <p>
+	 * Core's scroll listeners were lambdas we replaced and cannot be handed back,
+	 * so the column is left drawing core's flat list, which is also what they
+	 * will keep drawing until the bank is reopened and core makes its own again.
+	 */
+	void release()
+	{
+		detached = true;
+		rebuild();
+	}
+
+	void attach()
+	{
+		detached = false;
+	}
+
+	// ------------------------------------------------------------------
+	// Building rows
+	// ------------------------------------------------------------------
+
+	@Nullable
+	private RenderedRow buildTagRow(StripRow row, int height, @Nullable List<Widget> widgets)
+	{
+		if (widgets == null || widgets.isEmpty())
+		{
+			return null;
+		}
+
+		Widget background = widgets.get(0);
+		Widget icon = widgets.size() > 1 ? widgets.get(1) : null;
+		boolean tinted = row.isNested() && !detached;
 
 		RenderedRow out = new RenderedRow(row, height);
 
-		Widget background = createGraphic(name,
-			(active ? TabSprites.TAB_BACKGROUND_ACTIVE : TabSprites.TAB_BACKGROUND).getSpriteId(),
-			-1, width, height, MARGIN, -1);
 		background.setSpriteTiling(true);
-		addTabActions(row, background);
+		background.setOriginalHeight(height);
+		// Only the background carries menu options, as in core: the icon sits on
+		// top of it and the two overlap, so options on both would be listed twice.
+		if (tinted)
+		{
+			background.setAction(TAB_OP_UNFILE, OPTION_UNFILE);
+		}
+		else
+		{
+			clearAction(background, TAB_OP_UNFILE);
+		}
 		addDragOptions(background);
-		out.pieces.add(new Piece(background, 0));
+		out.pieces.add(new Piece(background, 0, null));
 		rowByWidget.put(background, row);
 
-		// Membership is shown by colour rather than by indenting the row. An
-		// indent deep enough to read also pushed the 36px item sprite off the
-		// right of a 39px column.
-		if (row.isNested())
+		if (tinted)
 		{
 			// Lighter over the active tab, which would otherwise stop looking
-			// active once it is tinted.
+			// active once it is tinted. Membership is shown by colour rather than
+			// by indenting: the column is 39px wide and an item sprite is 36.
+			boolean active = row.getTag().equals(core.activeTag());
 			int opacity = Math.min(255, opacityOf(config.tagTintStrength()) + (active ? 60 : 0));
-			out.pieces.add(new Piece(
-				fill(row.getParent().getColor(), opacity, MARGIN, width, height), 0));
+			out.pieces.add(new Piece(fill(row.getParent().getColor(), opacity, height), 0, null));
 		}
 
-		int iconDy = Math.max(0, (height - Constants.ITEM_SPRITE_HEIGHT) / 2);
-		// Only the background carries the menu options. The icon sits on top of
-		// it and the two overlap, so giving both the same options makes the
-		// client collect every entry twice. Clicks land on the background
-		// underneath, which is how the stock strip does it too.
-		Widget icon = createGraphic(name, -1, core.iconFor(tag),
-			Constants.ITEM_SPRITE_WIDTH, Constants.ITEM_SPRITE_HEIGHT, MARGIN + 3, -1);
-		addDragOptions(icon);
-		out.pieces.add(new Piece(icon, iconDy));
-		rowByWidget.put(icon, row);
+		if (icon != null)
+		{
+			int iconDy = Math.max(0, (height - Constants.ITEM_SPRITE_HEIGHT) / 2);
+			out.pieces.add(new Piece(icon, iconDy, null));
+			rowByWidget.put(icon, row);
 
-		// No name is drawn: the game already announces it in the hover text at
-		// the top left ("View tag tab potions"), and a text widget does not clip
-		// to its own bounds, so anything longer than the column ran over the
-		// bank items.
+			if (tinted && icon.getItemId() > 0)
+			{
+				// The tint is a rectangle over core's widgets, which would wash out
+				// the icon underneath. Drawn again on top, with nothing to click, so
+				// the real icon below still takes the clicks and the drag.
+				out.pieces.add(new Piece(item(icon.getName(), icon.getItemId(), MARGIN + 3), iconDy, icon));
+			}
+		}
+
 		return out;
 	}
 
-	private RenderedRow buildFolderRow(StripRow row, int width)
+	private RenderedRow buildFolderRow(StripRow row, int height, CoreColumn column)
 	{
 		Folder folder = row.getFolder();
-		int height = rowHeight();
 		String name = ColorUtil.wrapWithColorTag(folder.getName(), HILIGHT_COLOR);
 
 		RenderedRow out = new RenderedRow(row, height);
 
-		Widget background = fill(folder.getColor(), opacityOf(config.folderTintStrength()), MARGIN, width, height);
+		Widget background = fill(folder.getColor(), opacityOf(config.folderTintStrength()), height);
 		background.setName(name);
 		background.setAction(FOLDER_OP_TOGGLE, folder.isCollapsed() ? "Expand" : "Collapse");
 		background.setAction(FOLDER_OP_CHANGE_ICON, "Change icon");
@@ -558,37 +709,35 @@ public class TagColumn
 		background.setOnOpListener((JavaScriptCallback) event ->
 			actions.get().onFolderOp(event.getOp() - 1, row));
 		addDragOptions(background);
-		out.pieces.add(new Piece(background, 0));
+		out.pieces.add(new Piece(background, 0, null));
 		rowByWidget.put(background, row);
 
 		// Item sprites are transparent around the item, so the folder's colour
 		// still reads through from the rectangle behind. Drawn at its native
 		// size: scaling one down is a nearest-neighbour resample and looks
 		// visibly broken.
-		int icon = folderIcon(folder);
+		int icon = folderIcon(folder, column);
 		if (icon > 0)
 		{
-			Widget item = createGraphic(name, -1, icon,
-				Constants.ITEM_SPRITE_WIDTH, Constants.ITEM_SPRITE_HEIGHT, MARGIN + 3, -1);
-			out.pieces.add(new Piece(item, (height - Constants.ITEM_SPRITE_HEIGHT) / 2));
+			Widget sprite = item(name, icon, MARGIN + 3);
+			out.pieces.add(new Piece(sprite, Math.max(0, (height - Constants.ITEM_SPRITE_HEIGHT) / 2), null));
 		}
 
 		// A plain "+"/"-" rather than a chevron: the game fonts do not carry the
 		// arrow codepoints, and a missing glyph reads as an empty row. Badged
 		// into the corner when there is an icon under it.
-		Widget marker = parent.createChild(-1, WidgetType.TEXT);
+		Widget marker = child(WidgetType.TEXT);
 		marker.setText(folder.isCollapsed() ? "+" : "-");
 		marker.setFontId(FontID.BOLD_12);
 		marker.setTextColor(FOLDER_TEXT);
 		marker.setTextShadowed(true);
 		marker.setOriginalX(MARGIN + 2);
-		marker.setOriginalY(-1);
 		marker.setOriginalWidth(10);
 		marker.setOriginalHeight(icon > 0 ? 12 : height);
 		marker.setXTextAlignment(WidgetTextAlignment.LEFT);
 		marker.setYTextAlignment(WidgetTextAlignment.CENTER);
 		marker.revalidate();
-		out.pieces.add(new Piece(marker, 0));
+		out.pieces.add(new Piece(marker, 0, null));
 
 		return out;
 	}
@@ -597,57 +746,73 @@ public class TagColumn
 	 * A folder with no icon of its own borrows its first member's, so a folder
 	 * made by dragging two tabs together is never a blank bar.
 	 */
-	private int folderIcon(Folder folder)
+	private static int folderIcon(Folder folder, CoreColumn column)
 	{
 		if (folder.getIconItemId() > 0)
 		{
 			return folder.getIconItemId();
 		}
-		return folder.getTags().isEmpty() ? 0 : core.iconFor(folder.getTags().get(0));
-	}
 
-	private void addTabActions(StripRow row, Widget w)
-	{
-		w.setAction(TAB_OP_OPEN_TAG, "View tag tab");
-		w.setAction(TAB_OP_CHANGE_ICON, "Change icon");
-		w.setAction(TAB_OP_LAYOUT, core.hasLayout(row.getTag()) ? "Disable layout" : "Enable layout");
-		w.setAction(TAB_OP_EXPORT_TAB, "Export tag tab");
-		w.setAction(TAB_OP_RENAME_TAB, "Rename tag tab");
-		w.setAction(TAB_OP_DELETE_TAB, "Delete tag tab");
-		if (row.isNested())
+		for (String tag : folder.getTags())
 		{
-			w.setAction(TAB_OP_UNFILE, "Remove from folder");
+			List<Widget> widgets = column.tabs.get(tag);
+			if (widgets != null && widgets.size() > 1 && widgets.get(1).getItemId() > 0)
+			{
+				return widgets.get(1).getItemId();
+			}
 		}
-		w.setHasListener(true);
-		w.setOnOpListener((JavaScriptCallback) event -> actions.get().onTagOp(event.getOp() - 1, row));
+		return 0;
 	}
 
 	/**
 	 * Make a widget both draggable and a drop target.
 	 * <p>
-	 * The quantity settings are core's: an item sprite with no quantity drawn
-	 * still needs a non-zero quantity to render at all.
+	 * Core only does this to the icon. Doing it to the background too means an
+	 * item dropped anywhere on a tab tags it, and the tab can be picked up by any
+	 * part of it.
 	 */
-	private void addDragOptions(Widget w)
+	private static void addDragOptions(Widget w)
 	{
 		w.setClickMask(w.getClickMask() | WidgetConfig.DRAG | WidgetConfig.DRAG_ON);
 		w.setDragDeadTime(5);
 		w.setDragDeadZone(5);
-		w.setItemQuantity(10000);
-		w.setItemQuantityMode(ItemQuantityMode.NEVER);
+	}
+
+	private Widget child(int type)
+	{
+		Widget widget = parent.createChild(-1, type);
+		created.add(widget);
+		ours.add(widget);
+		return widget;
 	}
 
 	/** A filled rectangle in the given colour, used for folder and member tint. */
-	private Widget fill(int rgb, int opacity, int x, int width, int height)
+	private Widget fill(int rgb, int opacity, int height)
 	{
-		Widget w = parent.createChild(-1, WidgetType.RECTANGLE);
+		Widget w = child(WidgetType.RECTANGLE);
 		w.setFilled(true);
 		w.setTextColor(rgb);
 		w.setOpacity(opacity);
+		w.setOriginalX(MARGIN);
+		w.setOriginalY(-1);
+		w.setOriginalWidth(TAB_WIDTH);
+		w.setOriginalHeight(height);
+		w.revalidate();
+		return w;
+	}
+
+	private Widget item(String name, int itemId, int x)
+	{
+		Widget w = child(WidgetType.GRAPHIC);
+		w.setSpriteId(-1);
+		w.setItemId(itemId);
+		w.setItemQuantity(-1);
+		w.setBorderType(1);
+		w.setName(name);
 		w.setOriginalX(x);
 		w.setOriginalY(-1);
-		w.setOriginalWidth(width);
-		w.setOriginalHeight(height);
+		w.setOriginalWidth(Constants.ITEM_SPRITE_WIDTH);
+		w.setOriginalHeight(Constants.ITEM_SPRITE_HEIGHT);
 		w.revalidate();
 		return w;
 	}
@@ -659,38 +824,17 @@ public class TagColumn
 	 */
 	private int rowHeight()
 	{
-		return Math.max(24, Math.min(BankTagFoldersConfig.MAX_ROW_HEIGHT, config.tagRowHeight()));
+		return Math.max(MIN_ROW_HEIGHT, Math.min(BankTagFoldersConfig.MAX_ROW_HEIGHT, config.tagRowHeight()));
 	}
 
 	/**
 	 * Config gives strength as a percentage of colour; widgets want the
 	 * opposite, where 0 is solid and 255 is invisible.
 	 */
-	private static int opacityOf(int strength)
+	static int opacityOf(int strength)
 	{
 		int clamped = Math.max(0, Math.min(100, strength));
 		return 255 - (clamped * 255 / 100);
-	}
-
-	private Widget createGraphic(String name, int spriteId, int itemId, int width, int height, int x, int y)
-	{
-		Widget widget = parent.createChild(-1, WidgetType.GRAPHIC);
-		widget.setOriginalWidth(width);
-		widget.setOriginalHeight(height);
-		widget.setOriginalX(x);
-		widget.setOriginalY(y);
-		widget.setSpriteId(spriteId);
-
-		if (itemId > 0)
-		{
-			widget.setItemId(itemId);
-			widget.setItemQuantity(-1);
-			widget.setBorderType(1);
-		}
-
-		widget.setName(name);
-		widget.revalidate();
-		return widget;
 	}
 
 	// ------------------------------------------------------------------
@@ -700,29 +844,36 @@ public class TagColumn
 	/** Position the visible window of rows; everything else is hidden. */
 	void layoutRows()
 	{
-		if (!initialised)
+		if (parent == null || scroll == null)
 		{
 			return;
 		}
 
 		Widget dragged = client.getDraggedWidget();
+		lastDragged = dragged;
+		expectedY.clear();
+
+		for (Widget widget : coreWidgets)
+		{
+			hide(widget, dragged);
+		}
+		for (Widget widget : created)
+		{
+			hide(widget, dragged);
+		}
 		for (RenderedRow row : rendered)
 		{
 			row.top = -1;
-			for (Piece piece : row.pieces)
-			{
-				// Hiding the widget being dragged makes it vanish mid-drag when
-				// the column re-lays because of a scroll.
-				if (piece.widget != dragged)
-				{
-					piece.widget.setHidden(true);
-				}
-			}
 		}
 
+		// Core sizes the scroll catcher to the space the column has, clamped
+		// against the incinerator, the collapse button and the storage popup, and
+		// puts it at the top of the column. Reading it back gives both without
+		// redoing core's arithmetic.
+		availableHeight = scroll.getOriginalHeight();
 		clampScroll();
 
-		int y = scrollComponent.getOriginalY() + MARGIN;
+		int y = scroll.getOriginalY() + MARGIN;
 		int used = 0;
 		for (int i = scrollRow; i < rendered.size(); i++)
 		{
@@ -735,13 +886,33 @@ public class TagColumn
 			row.top = y;
 			for (Piece piece : row.pieces)
 			{
-				piece.widget.setOriginalY(y + piece.dy);
+				if (piece.mirrorOf != null && piece.mirrorOf == dragged)
+				{
+					continue;
+				}
+
+				int top = y + piece.dy;
+				piece.widget.setOriginalY(top);
 				piece.widget.setHidden(false);
 				piece.widget.revalidate();
+				expectedY.put(piece.widget, top);
 			}
 
 			y += row.height + MARGIN;
 			used += row.height + MARGIN;
+		}
+	}
+
+	/**
+	 * Hiding the widget being dragged makes it vanish mid-drag when the column
+	 * is laid out again because of a scroll.
+	 */
+	private void hide(Widget widget, @Nullable Widget dragged)
+	{
+		expectedY.put(widget, HIDDEN);
+		if (widget != dragged)
+		{
+			widget.setHidden(true);
 		}
 	}
 
@@ -775,12 +946,6 @@ public class TagColumn
 		scrollRow = Math.min(scrollRow, first);
 	}
 
-	/** Ask for a tag to be revealed and scrolled to when the column next builds. */
-	void requestReveal(String tag)
-	{
-		pendingReveal = tag;
-	}
-
 	/** Scroll a tag into view, if it did not already land on screen. */
 	private void scrollToTag(String tag)
 	{
@@ -801,7 +966,7 @@ public class TagColumn
 
 	void scrollBy(int delta)
 	{
-		if (!initialised || delta == 0)
+		if (parent == null || delta == 0)
 		{
 			return;
 		}
@@ -831,135 +996,43 @@ public class TagColumn
 	}
 
 	// ------------------------------------------------------------------
-	// Tag tab overview ("View tag tabs")
+	// Hit testing
 	// ------------------------------------------------------------------
 
-	/**
-	 * Draw every tab as an item icon in the bank area.
-	 * <p>
-	 * Ported from core: the icons are appended to the bank's own item container
-	 * rather than given their own layer, because a new layer would mean
-	 * recomputing the bank scrollbar.
-	 *
-	 * @return the height the bank's scroll area should be given
-	 */
-	int rebuildOverview(boolean overviewActive)
+	boolean isDrawn()
 	{
-		Widget items = client.getWidget(InterfaceID.Bankmain.ITEMS);
-		if (items == null)
-		{
-			return 0;
-		}
-
-		// The bank discards and rebuilds its item widgets, which takes ours with
-		// them; a stale reference would be hidden or written to at random.
-		for (Widget icon : overviewIcons)
-		{
-			if (icon == null || icon.getParent() != items)
-			{
-				overviewIcons.clear();
-				break;
-			}
-		}
-
-		// Hide only what we made. The previous approach -- hide every child past
-		// a remembered index -- hid *real bank items* whenever that index was
-		// captured while the bank was filtered to a tag. The bank computes its
-		// scroll height from the items still visible, so it came out at zero and
-		// everything below the first screenful became unreachable.
-		for (Widget icon : overviewIcons)
-		{
-			icon.setHidden(true);
-		}
-
-		if (!overviewActive)
-		{
-			return 0;
-		}
-
-		int itemX = BankTagsPlugin.BANK_ITEM_START_X;
-		int itemY = BankTagsPlugin.BANK_ITEM_START_Y;
-		int rowIndex = 0;
-		int used = 0;
-
-		for (String tag : core.tagTabs())
-		{
-			Widget menu;
-			if (used < overviewIcons.size())
-			{
-				menu = overviewIcons.get(used);
-			}
-			else
-			{
-				menu = items.createChild(-1, WidgetType.GRAPHIC);
-				menu.setOriginalWidth(BankTagsPlugin.BANK_ITEM_WIDTH);
-				menu.setOriginalHeight(BankTagsPlugin.BANK_ITEM_HEIGHT);
-				overviewIcons.add(menu);
-			}
-			used++;
-
-			StripRow row = StripRow.tag(tag, tree.folderOf(tag));
-			menu.setHidden(false);
-			menu.setOriginalX(itemX);
-			menu.setOriginalY(itemY);
-			menu.setName(ColorUtil.wrapWithColorTag(tag, HILIGHT_COLOR));
-			menu.setItemId(core.iconFor(tag));
-			menu.setItemQuantity(-1);
-			menu.setBorderType(1);
-			addTabActions(row, menu);
-			addDragOptions(menu);
-			menu.revalidate();
-
-			rowIndex++;
-			if (rowIndex == BankTagsPlugin.BANK_ITEMS_PER_ROW)
-			{
-				itemX = BankTagsPlugin.BANK_ITEM_START_X;
-				itemY += BankTagsPlugin.BANK_ITEM_Y_PADDING + BankTagsPlugin.BANK_ITEM_HEIGHT;
-				rowIndex = 0;
-			}
-			else
-			{
-				itemX += BankTagsPlugin.BANK_ITEM_X_PADDING + BankTagsPlugin.BANK_ITEM_WIDTH;
-			}
-		}
-
-		return itemY + BankTagsPlugin.BANK_ITEM_HEIGHT;
+		return parent != null && !rendered.isEmpty();
 	}
 
-	/** Hide the real bank items so the overview has the area to itself. */
-	void hideBank()
-	{
-		Widget items = client.getWidget(InterfaceID.Bankmain.ITEMS);
-		if (items == null || items.getChildren() == null)
-		{
-			return;
-		}
-		for (Widget w : items.getChildren())
-		{
-			if (w != null)
-			{
-				w.setHidden(true);
-			}
-		}
-	}
-
-	// ------------------------------------------------------------------
-	// Hit testing, for drops
-	// ------------------------------------------------------------------
-
-	/** The row a widget stands for, or null when the widget is not one of ours. */
+	/** The row a widget stands for, or null when it is not one of the column's rows. */
 	@Nullable
 	StripRow rowFor(@Nullable Widget widget)
 	{
 		return widget == null ? null : rowByWidget.get(widget);
 	}
 
-	boolean isColumnWidget(@Nullable Widget widget)
+	/** Widgets we added, as opposed to core's. */
+	boolean isOurs(@Nullable Widget widget)
 	{
-		return widget != null && parent != null && widget.getParent() == parent;
+		return widget != null && ours.contains(widget);
 	}
 
-	/** Whether a point on the canvas falls inside our column. */
+	/** -1 for the up arrow, 1 for the down arrow, 0 for anything else. */
+	int arrowDirection(@Nullable Widget widget)
+	{
+		if (widget == null)
+		{
+			return 0;
+		}
+		return widget == up ? -1 : widget == down ? 1 : 0;
+	}
+
+	boolean isNewTab(@Nullable Widget widget)
+	{
+		return widget != null && widget == newTab;
+	}
+
+	/** Whether a point on the canvas falls inside the column. */
 	boolean containsCanvasPoint(@Nullable Point point)
 	{
 		if (point == null || parent == null || parent.isHidden())
@@ -984,7 +1057,7 @@ public class TagColumn
 	@Nullable
 	Drop dropAt(@Nullable Point point)
 	{
-		if (point == null || parent == null || !initialised)
+		if (point == null || parent == null)
 		{
 			return null;
 		}
