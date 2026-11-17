@@ -108,6 +108,11 @@ public class TagColumn
 	private final List<Widget> created = new ArrayList<>();
 	private final Set<Widget> ours = Collections.newSetFromMap(new IdentityHashMap<>());
 
+	private final Pool headers = new Pool(WidgetType.RECTANGLE);
+	private final Pool tints = new Pool(WidgetType.RECTANGLE);
+	private final Pool items = new Pool(WidgetType.GRAPHIC);
+	private final Pool markers = new Pool(WidgetType.TEXT);
+
 	/** Where each widget should be after the last layout, or {@link #HIDDEN}. */
 	private final Map<Widget, Integer> expectedY = new IdentityHashMap<>();
 
@@ -116,7 +121,6 @@ public class TagColumn
 
 	/** What the container looked like when we last drew, to notice core redrawing. */
 	private Widget firstCore;
-	private int childCount = -1;
 	@Nullable
 	private Widget lastDragged;
 
@@ -163,6 +167,53 @@ public class TagColumn
 			this.widget = widget;
 			this.dy = dy;
 			this.mirrorOf = mirrorOf;
+		}
+	}
+
+	/**
+	 * Widgets of one kind that we add to the container once and then reuse.
+	 * <p>
+	 * Never removed from the middle of the child array. A dynamic child's slot
+	 * number is stored on the widget and is what a click is routed by, so taking
+	 * ours out from in front of another plugin's widgets slides theirs down a
+	 * slot without telling them, and their clicks land on the wrong widget.
+	 * Reusing ours keeps every slot where it was.
+	 */
+	private final class Pool
+	{
+		private final int type;
+		private final List<Widget> widgets = new ArrayList<>();
+		private int used;
+
+		Pool(int type)
+		{
+			this.type = type;
+		}
+
+		Widget next()
+		{
+			if (used < widgets.size())
+			{
+				return widgets.get(used++);
+			}
+
+			Widget widget = parent.createChild(-1, type);
+			widgets.add(widget);
+			created.add(widget);
+			ours.add(widget);
+			used++;
+			return widget;
+		}
+
+		void reset()
+		{
+			used = 0;
+		}
+
+		void clear()
+		{
+			widgets.clear();
+			used = 0;
 		}
 	}
 
@@ -363,7 +414,7 @@ public class TagColumn
 		down = column.down;
 		newTab = column.newTab;
 
-		removeOurs();
+		prepare();
 		hook();
 
 		if (detached)
@@ -438,49 +489,44 @@ public class TagColumn
 	}
 
 	/**
-	 * Cut our widgets back off, leaving core's exactly as it made them.
+	 * Get ready to draw into the widgets we already have.
 	 * <p>
-	 * Found by identity rather than by where they sit, and from a set that
-	 * outlives {@link #forget()}. Anything of ours that is left attached but no
-	 * longer tracked is never hidden or moved again, and stays on screen at its
-	 * old position, painting a folder's tint over whichever tab now sits there.
+	 * If core has rebuilt its tabs since the last draw, it truncated the child
+	 * array and took ours with it, so they are forgotten and made again. Otherwise
+	 * they are still attached, in the same slots, and are reused.
 	 */
-	private void removeOurs()
+	private void prepare()
 	{
 		Widget[] children = parent.getChildren();
-		if (children != null && !ours.isEmpty())
-		{
-			List<Widget> kept = new ArrayList<>(children.length);
-			for (Widget child : children)
-			{
-				if (child != null && !ours.contains(child))
-				{
-					kept.add(child);
-				}
-			}
+		boolean intact = !created.isEmpty() && children != null
+			&& attachedAt(children, created.get(0))
+			&& attachedAt(children, created.get(created.size() - 1));
 
-			// Core may have rebuilt its tabs since, truncating the child array
-			// and taking ours with it, in which case there is nothing to cut.
-			if (kept.size() != children.length)
-			{
-				// Copied from the array the client handed over rather than built
-				// fresh: it only accepts its own array type, and a plain Widget[]
-				// fails with a ClassCastException on every redraw.
-				Widget[] trimmed = Arrays.copyOf(children, kept.size());
-				for (int i = 0; i < trimmed.length; i++)
-				{
-					trimmed[i] = kept.get(i);
-				}
-				parent.setChildren(trimmed);
-			}
+		if (!intact)
+		{
+			created.clear();
+			ours.clear();
+			headers.clear();
+			tints.clear();
+			items.clear();
+			markers.clear();
 		}
 
-		created.clear();
-		ours.clear();
+		headers.reset();
+		tints.reset();
+		items.reset();
+		markers.reset();
+
 		rowByWidget.clear();
 		rendered.clear();
 		coreWidgets.clear();
 		expectedY.clear();
+	}
+
+	private static boolean attachedAt(Widget[] children, Widget widget)
+	{
+		int index = widget.getIndex();
+		return index >= 0 && index < children.length && children[index] == widget;
 	}
 
 	/**
@@ -505,7 +551,6 @@ public class TagColumn
 	private void remember()
 	{
 		Widget[] children = parent.getChildren();
-		childCount = children == null ? -1 : children.length;
 		firstCore = children != null && children.length > CORE_BUTTONS ? children[CORE_BUTTONS] : null;
 	}
 
@@ -544,7 +589,10 @@ public class TagColumn
 
 	private boolean attached(Widget[] children)
 	{
-		if (firstCore == null || scroll == null || children.length != childCount)
+		// Other plugins add widgets to this container too, so the count is no
+		// guide. Core's widgets still being the ones we drew, and ours still
+		// sitting in their slots, is.
+		if (firstCore == null || scroll == null || children.length <= CORE_BUTTONS)
 		{
 			return false;
 		}
@@ -552,7 +600,8 @@ public class TagColumn
 		{
 			return false;
 		}
-		return created.isEmpty() || children[children.length - 1] == created.get(created.size() - 1);
+		return created.isEmpty()
+			|| attachedAt(children, created.get(0)) && attachedAt(children, created.get(created.size() - 1));
 	}
 
 	private boolean placed()
@@ -587,10 +636,8 @@ public class TagColumn
 		parent = scroll = up = down = newTab = hooked = null;
 		firstCore = null;
 		lastDragged = null;
-		childCount = -1;
-		// created and ours are kept: whatever of ours is still attached has to be
-		// found and removed by the next draw.
-		created.clear();
+		// Our widgets are kept: if they are still attached the next draw reuses
+		// them, and if core has dropped them it finds that out then.
 		rowByWidget.clear();
 		rendered.clear();
 		coreWidgets.clear();
@@ -670,7 +717,7 @@ public class TagColumn
 			// by indenting: the column is 39px wide and an item sprite is 36.
 			boolean active = row.getTag().equals(core.activeTag());
 			int opacity = Math.min(255, opacityOf(config.tagTintStrength()) + (active ? 60 : 0));
-			out.pieces.add(new Piece(fill(row.getParent().getColor(), opacity, height), 0, null));
+			out.pieces.add(new Piece(rectangle(tints.next(), row.getParent().getColor(), opacity, height), 0, null));
 		}
 
 		if (icon != null)
@@ -684,7 +731,7 @@ public class TagColumn
 				// The tint is a rectangle over core's widgets, which would wash out
 				// the icon underneath. Drawn again on top, with nothing to click, so
 				// the real icon below still takes the clicks and the drag.
-				out.pieces.add(new Piece(item(icon.getName(), icon.getItemId(), MARGIN + 3), iconDy, icon));
+				out.pieces.add(new Piece(item(items.next(), icon.getName(), icon.getItemId(), MARGIN + 3), iconDy, icon));
 			}
 		}
 
@@ -698,7 +745,7 @@ public class TagColumn
 
 		RenderedRow out = new RenderedRow(row, height);
 
-		Widget background = fill(folder.getColor(), opacityOf(config.folderTintStrength()), height);
+		Widget background = rectangle(headers.next(), folder.getColor(), opacityOf(config.folderTintStrength()), height);
 		background.setName(name);
 		background.setAction(FOLDER_OP_TOGGLE, folder.isCollapsed() ? "Expand" : "Collapse");
 		background.setAction(FOLDER_OP_CHANGE_ICON, "Change icon");
@@ -719,14 +766,14 @@ public class TagColumn
 		int icon = folderIcon(folder, column);
 		if (icon > 0)
 		{
-			Widget sprite = item(name, icon, MARGIN + 3);
+			Widget sprite = item(items.next(), name, icon, MARGIN + 3);
 			out.pieces.add(new Piece(sprite, Math.max(0, (height - Constants.ITEM_SPRITE_HEIGHT) / 2), null));
 		}
 
 		// A plain "+"/"-" rather than a chevron: the game fonts do not carry the
 		// arrow codepoints, and a missing glyph reads as an empty row. Badged
 		// into the corner when there is an icon under it.
-		Widget marker = child(WidgetType.TEXT);
+		Widget marker = markers.next();
 		marker.setText(folder.isCollapsed() ? "+" : "-");
 		marker.setFontId(FontID.BOLD_12);
 		marker.setTextColor(FOLDER_TEXT);
@@ -778,18 +825,9 @@ public class TagColumn
 		w.setDragDeadZone(5);
 	}
 
-	private Widget child(int type)
-	{
-		Widget widget = parent.createChild(-1, type);
-		created.add(widget);
-		ours.add(widget);
-		return widget;
-	}
-
 	/** A filled rectangle in the given colour, used for folder and member tint. */
-	private Widget fill(int rgb, int opacity, int height)
+	private static Widget rectangle(Widget w, int rgb, int opacity, int height)
 	{
-		Widget w = child(WidgetType.RECTANGLE);
 		w.setFilled(true);
 		w.setTextColor(rgb);
 		w.setOpacity(opacity);
@@ -801,9 +839,8 @@ public class TagColumn
 		return w;
 	}
 
-	private Widget item(String name, int itemId, int x)
+	private static Widget item(Widget w, String name, int itemId, int x)
 	{
-		Widget w = child(WidgetType.GRAPHIC);
 		w.setSpriteId(-1);
 		w.setItemId(itemId);
 		w.setItemQuantity(-1);
